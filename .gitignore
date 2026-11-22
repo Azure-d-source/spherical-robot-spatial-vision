@@ -1,0 +1,31 @@
+# 本机赛事材料与实验数据
+/local/
+/data/*
+!/data/README.md
+/artifacts/
+/runs/
+/outputs/
+/checkpoints/
+
+# 本机环境、缓存与日志
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+dist/
+coverage/
+*.log
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+
+# 编辑器、系统文件与临时办公文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*
