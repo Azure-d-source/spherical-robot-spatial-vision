@@ -51,6 +51,12 @@ npx --yes --package @playcanvas/splat-transform@3.12.0 splat-transform --list-gp
 npx --yes --package @playcanvas/splat-transform@3.12.0 splat-transform -g 0 --unbundled export_8000.ply index.html
 ```
 
+## 本地视觉作业试跑
+
+在同一 RTX 4060 Laptop 上用新命令行入口复跑公开 32 图。输入准备至 1200×675，PyCOLMAP 4.2.1 注册 32/32 张，得到 4,557 个稀疏点。Brush v0.3.0 取 400 步，导出 4,920 个高斯。PLY 1,162,669 字节，SOG 88,316 字节，两份资产记录的高斯数一致。单轮准备 11.71 秒、注册 49.80 秒、优化及 PLY 导出 11.33 秒、SOG 2.31 秒。该轮验证作业和产物交接，画质仍使用前述 8,000 步基线做对照。 [运行命令](../../src/README.md#本地视觉作业)
+
+短轮 SOG 打包为单文件后，通过 Edge WebGPU 本机打开，验证了拖动、移动相机和画面变化。单次首帧约 0.75 秒，检测期间无页面、网络或脚本错误。
+
 ## 下一轮对照
 
 先固定公开照片的输入顺序，复跑单图、多图点云和 3DGS，记录注册、优化、导出及浏览耗时。仿真阶段用有背面标记的展品检查补拍前后轮廓，保存实际 RGB 和布景版本。用户素材到位后，用照片或 MP4 抽帧走同一重建流程，先验收书桌和相邻角落。 [本轮执行方案](../design/offline-scan-execution-plan.md)
