@@ -99,8 +99,9 @@ ns-export gaussian-splat --load-config "$CONFIG" --output-dir ./exports
 | PUT /api/scenes/{id}/target | reference_frame_id、selection、view_checklist | 200，保存当前目标与待拍方向。 |
 | POST /api/scenes/{id}/frames | image、capture_id、view_label、captured_at | 201 返回 frame_id。相同 capture_id 和内容重试时返回已有记录。 |
 | POST /api/scenes/{id}/revisions | 按拍摄顺序排列的 frame_ids | 201，冻结输入列表。 |
-| POST /api/jobs | revision_id、kind、recipe_version | 202，返回 job_id。相同请求复用作业记录。 |
-| GET /api/jobs/{id} | job_id | 状态、当前阶段、错误码或产物地址。 |
+| POST /api/jobs | revision_id、kind、recipe_version（默认 v1） | 202，返回 job_id。相同批次、类型和配方版本复用作业记录。 |
+| GET /api/scenes/{id}/jobs | scene_id | 返回该场景下所有批次的作业。 |
+| GET /api/jobs/{id} | job_id | 当前返回作业状态和输入批次。阶段、错误码和产物地址随 Worker 接入。 |
 | GET /api/scenes/{id} | scene_id | 当前照片、各批次和可打开的历史结果。 |
 
 上传、建批次和开作业按场景鉴权。网页和静态产物通过同源 HTTPS 地址服务。板端可以主动轮询服务器上的拍照指令，以回避现场局域网无法主动连入板端的问题。照片成功入库后确认指令已执行。现场也可从板端按钮触发同一个上传流程。

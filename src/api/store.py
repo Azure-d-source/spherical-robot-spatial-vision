@@ -1,15 +1,9 @@
 import json
-import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import HTTPException
-
-ROOT = Path(__file__).resolve().parents[2]
-DATA = Path(os.environ.get("SPATIAL_DATA_DIR", ROOT / "data" / "runtime")).resolve()
-DATABASE = DATA / "workspace.sqlite3"
-PHOTOS = DATA / "photos"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scenes (
@@ -41,30 +35,35 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 
-@contextmanager
-def connection(write=False):
-    db = sqlite3.connect(DATABASE, timeout=15)
-    db.row_factory = sqlite3.Row
-    try:
-        db.execute("PRAGMA foreign_keys=ON")
-        db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-        yield db
-        db.commit()
-    except BaseException:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+class Store:
+    def __init__(self, data_dir: Path):
+        root = data_dir.resolve()
+        self.database = root / "workspace.sqlite3"
+        self.photos = root / "photos"
 
+    @contextmanager
+    def connection(self, write=False):
+        db = sqlite3.connect(self.database, timeout=15)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            yield db
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
-def initialize():
-    PHOTOS.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DATABASE, timeout=15)
-    try:
-        db.execute("PRAGMA journal_mode=WAL")
-        db.executescript(SCHEMA)
-    finally:
-        db.close()
+    def initialize(self):
+        self.photos.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(self.database, timeout=15)
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.executescript(SCHEMA)
+        finally:
+            db.close()
 
 
 def scene_record(db, scene_id):

@@ -13,14 +13,14 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r src/api/requirements.txt
 npm --prefix src/web ci
 npm --prefix src/web run build
-.\.venv\Scripts\python.exe -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn src.api.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
 打开 [本地工作台](http://127.0.0.1:8000/) 或 [API 交互文档](http://127.0.0.1:8000/docs)。在 macOS 或 Linux 下将上述 Python 虚拟环境入口换成 `.venv/bin/python`。
 
 第一次试用时，可创建一个“桌面玩具”场景，分别选择正面和背面机位并上传两张不同照片，按拍摄顺序勾选它们，点击 **确认照片批次**。在 **批次与任务** 里选择多图点云融合或 3DGS 实景重建，提交后即可查看对应批次和排队状态。
 
-修改网页时，可保持 API 运行，在另一个终端执行 `npm --prefix src/web run dev`，打开 Vite 输出的地址。开发服务器把 `/api` 请求转给本机 8000 端口。修改后端时可在 Uvicorn 命令末尾增加 `--reload --reload-dir src/api`。运行数据默认保存在 `data/runtime/`，可在启动 API 前通过环境变量 `SPATIAL_DATA_DIR` 指定其他目录。本机开发服务绑定回环地址，供本机设备使用。
+修改网页时，可保持 API 运行，在另一个终端执行 `npm --prefix src/web run dev`，打开 Vite 输出的地址。开发服务器把 `/api` 请求转给本机 8000 端口。也可以先启动 API，再构建网页，构建成功后直接打开工作台。修改后端时可在 Uvicorn 命令末尾增加 `--reload --reload-dir src/api`。运行数据默认保存在 `data/runtime/`，可在启动 API 前通过环境变量 `SPATIAL_DATA_DIR` 指定其他目录。本机开发服务绑定回环地址，供本机设备使用。
 
 ## 一次扫描如何完成
 

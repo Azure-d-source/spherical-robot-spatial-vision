@@ -1,3 +1,4 @@
+import sqlite3
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -7,15 +8,16 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from src.api import store
-from src.api.main import app
+from src.api.images import MAX_BYTES, MAX_PIXELS, MAX_REQUEST
+from src.api.main import create_app
+from src.api.settings import Settings
 
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
-        root = Path(self.enterContext(TemporaryDirectory()))
-        self.enterContext(patch.object(store, "DATABASE", root / "workspace.sqlite3"))
-        self.enterContext(patch.object(store, "PHOTOS", root / "photos"))
+        self.root = Path(self.enterContext(TemporaryDirectory()))
+        self.dist = self.root / "dist"
+        app = create_app(Settings(data_dir=self.root, web_dist=self.dist))
         self.client = self.enterContext(TestClient(app))
         self.scene = self.create_scene("Toy")
 
@@ -28,14 +30,91 @@ class WorkflowTests(unittest.TestCase):
         scene = self.post_json("/api/scenes", {"title": title, "source": "sample"})
         return f"/api/scenes/{scene['scene_id']}"
 
-    def upload(self, capture_id, color):
+    def upload(self, capture_id, color, scene=None):
         image = BytesIO()
         Image.new("RGB", (4, 4), color).save(image, "PNG")
+        return self.upload_bytes(image.getvalue(), capture_id, scene)
+
+    def upload_bytes(self, data, capture_id="camera", scene=None):
         return self.client.post(
-            self.scene + "/frames",
+            (scene or self.scene) + "/frames",
             data={"capture_id": capture_id, "view_label": "front"},
-            files={"image": ("toy.png", image.getvalue(), "image/png")},
+            files={"image": ("toy.png", data, "image/png")},
         )
+
+    def test_upload_size_limits_with_and_without_content_length(self):
+        sized = self.upload_bytes(b"x" * (MAX_BYTES + 1))
+        self.assertEqual(sized.status_code, 413)
+        headers = {"Content-Type": "multipart/form-data; boundary=upload"}
+        prefix = b'--upload\r\nContent-Disposition: form-data; name="image"; filename="toy.png"\r\n\r\n'
+        chunk = b"x" * (1024 * 1024)
+
+        def body():
+            yield prefix
+            for _ in range(MAX_REQUEST // len(chunk) + 1):
+                yield chunk
+            yield b"\r\n--upload--\r\n"
+
+        for content in (b"".join(body()), body()):
+            with self.subTest(streamed=not isinstance(content, bytes)):
+                response = self.client.post(self.scene + "/frames", headers=headers, content=content)
+                if not isinstance(content, bytes):
+                    self.assertNotIn("content-length", response.request.headers)
+                self.assertEqual(response.status_code, 413)
+        self.assertEqual(self.client.get(self.scene + "/frames").json(), [])
+        self.assertEqual(list((self.root / "photos").iterdir()), [])
+
+    def test_upload_rejects_corrupt_animated_and_oversized_images(self):
+        animation = BytesIO()
+        Image.new("RGB", (4, 4), "blue").save(
+            animation, "PNG", save_all=True, append_images=[Image.new("RGB", (4, 4), "red")]
+        )
+        large = BytesIO()
+        width = 6000
+        Image.new("1", (width, MAX_PIXELS // width + 1)).save(large, "PNG")
+        for name, payload, status in (
+            ("corrupt", b"\x89PNG\r\n\x1a\n", 422),
+            ("animated", animation.getvalue(), 422),
+            ("oversized", large.getvalue(), 413),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(self.upload_bytes(payload).status_code, status)
+        self.assertEqual(self.client.get(self.scene + "/frames").json(), [])
+
+    def test_failed_commit_removes_only_new_photo_and_allows_retry(self):
+        saved = self.upload("existing", "blue").json()
+        next_scene = self.create_scene("Second scene")
+        photos = self.root / "photos"
+        existing_files = set(photos.iterdir())
+        connect = sqlite3.connect
+
+        class FailingCommit(sqlite3.Connection):
+            def commit(self):
+                if self.total_changes:
+                    raise sqlite3.OperationalError("simulated commit failure")
+                super().commit()
+
+        with patch("src.api.store.sqlite3.connect", side_effect=lambda *args, **kwargs: connect(
+            *args, **kwargs, factory=FailingCommit
+        )):
+            with self.assertRaisesRegex(sqlite3.OperationalError, "simulated commit failure"):
+                self.upload("new", "red")
+            with self.assertRaisesRegex(sqlite3.OperationalError, "simulated commit failure"):
+                self.upload("same-bytes", "blue", scene=next_scene)
+
+        self.assertEqual(set(photos.iterdir()), existing_files)
+        self.assertEqual(self.client.get(saved["image_url"]).status_code, 200)
+        self.assertEqual(self.client.get(self.scene + "/frames").json(), [saved])
+        self.assertEqual(self.client.get(next_scene + "/frames").json(), [])
+        self.assertEqual(self.upload("new", "red").status_code, 201)
+
+    def test_workbench_can_be_built_after_api_start(self):
+        self.assertEqual(self.client.get("/api/health").status_code, 200)
+        self.assertEqual(self.client.get("/").status_code, 404)
+        self.dist.mkdir()
+        (self.dist / "index.html").write_text("<h1>Workbench</h1>", encoding="utf-8")
+        self.assertEqual(self.client.get("/").text, "<h1>Workbench</h1>")
+        self.assertEqual(self.client.get("/api/health").status_code, 200)
 
     def test_upload_retries_preserve_capture_identity(self):
         original = self.upload("camera-1", "blue")

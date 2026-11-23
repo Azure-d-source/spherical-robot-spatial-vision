@@ -1,50 +1,54 @@
 import json
+import logging
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import store
-from .images import UploadLimit, photo_path, read_image, save_image
+from .images import MAX_REQUEST, photo_path, read_image, save_image
 from .models import Frame, Job, JobInput, Revision, RevisionInput, Scene, SceneDetail, SceneInput
+from .settings import DEFAULT_WEB_DIST, Settings
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def get_store(request: Request) -> store.Store:
+    return request.app.state.store
+
+
+Storage = Annotated[store.Store, Depends(get_store)]
 
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    store.initialize()
-    yield
-
-
-app = FastAPI(title="绕物成景 · 空间视觉 API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(UploadLimit)
-
-
-@app.get("/api/health", tags=["系统"])
-def health():
-    with store.connection() as db:
+@router.get("/api/health", tags=["系统"])
+def health(storage: Storage):
+    with storage.connection() as db:
         db.execute("SELECT scene_id FROM scenes LIMIT 1").fetchone()
     return {"status": "ok"}
 
 
-@app.get("/api/scenes", response_model=list[Scene], tags=["场景"])
-def scenes():
-    with store.connection() as db:
+@router.get("/api/scenes", response_model=list[Scene], tags=["场景"])
+def scenes(storage: Storage):
+    with storage.connection() as db:
         return [dict(row) for row in db.execute("SELECT * FROM scenes ORDER BY created_at DESC, rowid DESC")]
 
 
-@app.post("/api/scenes", status_code=201, response_model=Scene, tags=["场景"])
-def create_scene(payload: SceneInput):
+@router.post("/api/scenes", status_code=201, response_model=Scene, tags=["场景"])
+def create_scene(payload: SceneInput, storage: Storage):
     scene = dict(scene_id=uuid4().hex, created_at=timestamp(), **payload.model_dump())
-    with store.connection(write=True) as db:
+    with storage.connection(write=True) as db:
         db.execute("""
             INSERT INTO scenes (scene_id, title, source, target, created_at)
             VALUES (:scene_id, :title, :source, :target, :created_at)
@@ -52,9 +56,9 @@ def create_scene(payload: SceneInput):
     return scene
 
 
-@app.get("/api/scenes/{scene_id}", response_model=SceneDetail, tags=["场景"])
-def get_scene(scene_id: str):
-    with store.connection() as db:
+@router.get("/api/scenes/{scene_id}", response_model=SceneDetail, tags=["场景"])
+def get_scene(scene_id: str, storage: Storage):
+    with storage.connection() as db:
         return {
             **store.scene_record(db, scene_id),
             "frames": store.list_frames(db, scene_id),
@@ -63,17 +67,19 @@ def get_scene(scene_id: str):
         }
 
 
-@app.get("/api/scenes/{scene_id}/frames", response_model=list[Frame], tags=["照片"])
-def frames(scene_id: str):
-    with store.connection() as db:
+@router.get("/api/scenes/{scene_id}/frames", response_model=list[Frame], tags=["照片"])
+def frames(scene_id: str, storage: Storage):
+    with storage.connection() as db:
         store.scene_record(db, scene_id)
         return store.list_frames(db, scene_id)
 
 
-@app.post("/api/scenes/{scene_id}/frames", status_code=201, response_model=Frame, tags=["照片"])
+@router.post("/api/scenes/{scene_id}/frames", status_code=201, response_model=Frame,
+             tags=["照片"], max_body_size=MAX_REQUEST)
 def upload_frame(
     scene_id: str,
     response: Response,
+    storage: Storage,
     image: Annotated[UploadFile, File()],
     view_label: Annotated[str, Form(min_length=1, max_length=120)],
     capture_id: Annotated[str | None, Form(max_length=128)] = None,
@@ -83,72 +89,88 @@ def upload_frame(
     if not view_label or (capture_id is not None and not capture_id.strip()):
         raise HTTPException(422, "机位名称和采集编号须包含有效字符")
     capture_id = capture_id.strip() if capture_id else None
-    with store.connection() as db:
+    with storage.connection() as db:
         store.scene_record(db, scene_id)
     data, digest, media_type, width, height = read_image(image)
-    with store.connection(write=True) as db:
-        previous = db.execute("""
-            SELECT f.* FROM captures c JOIN frames f ON c.frame_id = f.frame_id
-            WHERE c.scene_id = ? AND c.capture_id = ?
-        """, (scene_id, capture_id)).fetchone()
-        if previous is not None:
-            if previous["sha256"] != digest:
-                raise HTTPException(409, "该采集编号已关联另一张照片")
-            response.status_code = 200
-            return store.frame_record(previous)
+    destination = photo_path(storage.photos, digest, media_type)
+    published = False
+    try:
+        with storage.connection(write=True) as db:
+            previous = db.execute("""
+                SELECT f.* FROM captures c JOIN frames f ON c.frame_id = f.frame_id
+                WHERE c.scene_id = ? AND c.capture_id = ?
+            """, (scene_id, capture_id)).fetchone()
+            if previous is not None:
+                if previous["sha256"] != digest:
+                    raise HTTPException(409, "该采集编号已关联另一张照片")
+                response.status_code = 200
+                return store.frame_record(previous)
 
-        existing = db.execute("SELECT * FROM frames WHERE scene_id = ? AND sha256 = ?", (scene_id, digest)).fetchone()
-        if existing is not None:
-            if capture_id:
-                db.execute("INSERT INTO captures VALUES (?, ?, ?)", (scene_id, capture_id, existing["frame_id"]))
-            response.status_code = 200
-            return store.frame_record(existing)
+            existing = db.execute("SELECT * FROM frames WHERE scene_id = ? AND sha256 = ?", (scene_id, digest)).fetchone()
+            if existing is not None:
+                if capture_id:
+                    db.execute("INSERT INTO captures VALUES (?, ?, ?)", (scene_id, capture_id, existing["frame_id"]))
+                response.status_code = 200
+                return store.frame_record(existing)
 
-        frame_id = uuid4().hex
-        capture_id = capture_id or uuid4().hex
-        now = timestamp()
-        name = PureWindowsPath(image.filename or "").name[:255] or "photo"
-        time_taken = captured_at.isoformat() if captured_at is not None else now
-        record = dict(frame_id=frame_id, scene_id=scene_id, capture_id=capture_id, filename=name,
-                      view_label=view_label, captured_at=time_taken, created_at=now, sha256=digest,
-                      media_type=media_type, size_bytes=len(data), width=width, height=height)
-        save_image(data, digest, media_type)
-        db.execute("""
-            INSERT INTO frames (frame_id, scene_id, capture_id, filename, view_label, captured_at,
-                                created_at, sha256, media_type, size_bytes, width, height)
-            VALUES (:frame_id, :scene_id, :capture_id, :filename, :view_label, :captured_at,
-                    :created_at, :sha256, :media_type, :size_bytes, :width, :height)
-        """, record)
-        db.execute("INSERT INTO captures VALUES (?, ?, ?)", (scene_id, capture_id, frame_id))
-        return store.frame_record(record)
+            frame_id = uuid4().hex
+            capture_id = capture_id or uuid4().hex
+            now = timestamp()
+            name = PureWindowsPath(image.filename or "").name[:255] or "photo"
+            time_taken = captured_at.isoformat() if captured_at is not None else now
+            record = dict(frame_id=frame_id, scene_id=scene_id, capture_id=capture_id, filename=name,
+                          view_label=view_label, captured_at=time_taken, created_at=now, sha256=digest,
+                          media_type=media_type, size_bytes=len(data), width=width, height=height)
+            db.execute("""
+                INSERT INTO frames (frame_id, scene_id, capture_id, filename, view_label, captured_at,
+                                    created_at, sha256, media_type, size_bytes, width, height)
+                VALUES (:frame_id, :scene_id, :capture_id, :filename, :view_label, :captured_at,
+                        :created_at, :sha256, :media_type, :size_bytes, :width, :height)
+            """, record)
+            db.execute("INSERT INTO captures VALUES (?, ?, ?)", (scene_id, capture_id, frame_id))
+            published = save_image(data, destination)
+            return store.frame_record(record)
+    except BaseException:
+        if published:
+            try:
+                with storage.connection(write=True) as db:
+                    # Another request may have committed a reference after this upload rolled back.
+                    referenced = db.execute(
+                        "SELECT 1 FROM frames WHERE sha256 = ? LIMIT 1", (digest,)
+                    ).fetchone()
+                    if referenced is None:
+                        destination.unlink(missing_ok=True)
+            except (sqlite3.Error, OSError):
+                logger.exception("Could not clean up photo after upload rollback: %s", digest)
+        raise
 
 
-@app.get("/api/frames/{frame_id}/image", response_class=FileResponse, tags=["照片"])
-def get_image(frame_id: str):
-    with store.connection() as db:
+@router.get("/api/frames/{frame_id}/image", response_class=FileResponse, tags=["照片"])
+def get_image(frame_id: str, storage: Storage):
+    with storage.connection() as db:
         row = db.execute("SELECT sha256, media_type FROM frames WHERE frame_id = ?", (frame_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "未找到该照片")
-    path = photo_path(row["sha256"], row["media_type"])
+    path = photo_path(storage.photos, row["sha256"], row["media_type"])
     if not path.is_file():
         raise HTTPException(404, "原图文件缺失")
     return FileResponse(path, media_type=row["media_type"], headers={"X-Content-Type-Options": "nosniff"})
 
 
-@app.get("/api/scenes/{scene_id}/revisions", response_model=list[Revision], tags=["批次"])
-def revisions(scene_id: str):
-    with store.connection() as db:
+@router.get("/api/scenes/{scene_id}/revisions", response_model=list[Revision], tags=["批次"])
+def revisions(scene_id: str, storage: Storage):
+    with storage.connection() as db:
         store.scene_record(db, scene_id)
         return store.list_revisions(db, scene_id)
 
 
-@app.post("/api/scenes/{scene_id}/revisions", status_code=201, response_model=Revision, tags=["批次"])
-def create_revision(scene_id: str, payload: RevisionInput, response: Response):
+@router.post("/api/scenes/{scene_id}/revisions", status_code=201, response_model=Revision, tags=["批次"])
+def create_revision(scene_id: str, payload: RevisionInput, response: Response, storage: Storage):
     ids = payload.frame_ids
     if len(ids) != len(set(ids)):
         raise HTTPException(422, "同一批次里出现了重复照片")
     frozen = json.dumps(ids, separators=(",", ":"))
-    with store.connection(write=True) as db:
+    with storage.connection(write=True) as db:
         store.scene_record(db, scene_id)
         existing = db.execute("SELECT * FROM revisions WHERE scene_id = ? AND frame_ids = ?", (scene_id, frozen)).fetchone()
         if existing is not None:
@@ -168,17 +190,17 @@ def create_revision(scene_id: str, payload: RevisionInput, response: Response):
     return dict(revision_id=revision_id, scene_id=scene_id, version=version, frame_ids=ids, created_at=now)
 
 
-@app.get("/api/scenes/{scene_id}/jobs", response_model=list[Job], tags=["作业"])
-def scene_jobs(scene_id: str):
-    with store.connection() as db:
+@router.get("/api/scenes/{scene_id}/jobs", response_model=list[Job], tags=["作业"])
+def scene_jobs(scene_id: str, storage: Storage):
+    with storage.connection() as db:
         store.scene_record(db, scene_id)
         return store.list_jobs(db, scene_id)
 
 
-@app.post("/api/jobs", status_code=202, response_model=Job, tags=["作业"])
-def submit_job(payload: JobInput):
+@router.post("/api/jobs", status_code=202, response_model=Job, tags=["作业"])
+def submit_job(payload: JobInput, storage: Storage):
     """Persist a queued job. GPU workers will consume the queue in a later integration."""
-    with store.connection(write=True) as db:
+    with storage.connection(write=True) as db:
         revision = db.execute("SELECT revision_id FROM revisions WHERE revision_id = ?", (payload.revision_id,)).fetchone()
         if revision is None:
             raise HTTPException(404, "未找到该照片批次")
@@ -194,15 +216,40 @@ def submit_job(payload: JobInput):
         return job
 
 
-@app.get("/api/jobs/{job_id}", response_model=Job, tags=["作业"])
-def get_job(job_id: str):
-    with store.connection() as db:
+@router.get("/api/jobs/{job_id}", response_model=Job, tags=["作业"])
+def get_job(job_id: str, storage: Storage):
+    with storage.connection() as db:
         row = db.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "未找到该作业")
     return dict(row)
 
 
-web_dist = store.ROOT / "src" / "web" / "dist"
-if (web_dist / "index.html").is_file():
-    app.mount("/", StaticFiles(directory=web_dist, html=True), name="workbench")
+class WorkbenchFiles(StaticFiles):
+    def __init__(self, directory: Path):
+        super().__init__(directory=directory, html=True, check_dir=False)
+        self.index = directory / "index.html"
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not await run_in_threadpool(self.index.is_file):
+            raise HTTPException(404, "工作台尚未构建")
+        await super().__call__(scope, receive, send)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        active_settings = settings or Settings.from_env()
+        storage = store.Store(active_settings.data_dir)
+        await run_in_threadpool(storage.initialize)
+        app.state.store = storage
+        yield
+
+    application = FastAPI(title="绕物成景 · 空间视觉 API", version="0.1.0", lifespan=lifespan)
+    application.include_router(router)
+    web_dist = settings.web_dist if settings else DEFAULT_WEB_DIST
+    application.mount("/", WorkbenchFiles(web_dist.resolve()), name="workbench")
+    return application
+
+
+app = create_app()
