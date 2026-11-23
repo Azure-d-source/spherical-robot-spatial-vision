@@ -2,6 +2,26 @@
 
 面向第四届“东软教育杯”人工智能应用方向的参赛作品。用带单目相机的球形机器人绕一个桌面展品取景，云端处理照片，网页展示从首张深度图到可环绕浏览的 3DGS 实景。首个演示对象是一件有纹理、背面有明显标记的玩具，重建范围覆盖玩具和附近的桌面。
 
+## 本地启动工作台
+
+当前开发版支持创建场景、上传并预览原图、将选中的照片冻结为批次，以及提交和查看计算任务。SQLite 保存任务记录，原图写入本地磁盘。GPU 计算进程待接入，提交的任务会保留在队列中。
+
+以下命令在仓库根目录执行。开发环境使用 Python 3.12 和 Node.js 22.12 或更高版本。首次运行先安装依赖并构建网页。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r src/api/requirements.txt
+npm --prefix src/web ci
+npm --prefix src/web run build
+.\.venv\Scripts\python.exe -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
+
+打开 [本地工作台](http://127.0.0.1:8000/) 或 [API 交互文档](http://127.0.0.1:8000/docs)。在 macOS 或 Linux 下将上述 Python 虚拟环境入口换成 `.venv/bin/python`。
+
+第一次试用时，可创建一个“桌面玩具”场景，分别选择正面和背面机位并上传两张不同照片，按拍摄顺序勾选它们，点击 **确认照片批次**。在 **批次与任务** 里选择多图点云融合或 3DGS 实景重建，提交后即可查看对应批次和排队状态。
+
+修改网页时，可保持 API 运行，在另一个终端执行 `npm --prefix src/web run dev`，打开 Vite 输出的地址。开发服务器把 `/api` 请求转给本机 8000 端口。修改后端时可在 Uvicorn 命令末尾增加 `--reload --reload-dir src/api`。运行数据默认保存在 `data/runtime/`，可在启动 API 前通过环境变量 `SPATIAL_DATA_DIR` 指定其他目录。本机开发服务绑定回环地址，供本机设备使用。
+
 ## 一次扫描如何完成
 
 1. **选目标并首拍。** 在网页上选中玩具，板端停稳拍摄并上传。云端用 DA3-BASE 生成相对深度图和初始彩色点云。
@@ -20,7 +40,7 @@
 | 仿真 | 4 个虚拟机位生成 RGB 图像，跑通本机上传、推理和结果取回 | 与真机共用正式任务接口，网页现场可操作 |
 | 球形机器人与云端 | 已明确板端取景上传、GPU 服务处理、浏览器展示的职责 | 球体与相机实装、云端部署、真机完整联调 |
 
-当前提交是**项目文档与试验记录基线**，正式源码和可运行入口随联调推进。公开样例的模型版本、配置、数据和测量边界见 [实测记录](docs/experiments/public-sample-benchmark.md)。
+上述模型实验来自独立原型，模型版本、数据与计时条件见 [实测记录](docs/experiments/public-sample-benchmark.md)。当前工作台的开发入口见 [源码目录](src/README.md)。
 
 ## 仓库结构
 
@@ -31,7 +51,8 @@ docs/
   design/          项目总览、系统架构与实施步骤
   experiments/     公开样例的跑通记录与验收依据
   research/        球形机器人空间视觉调研与历届国奖案例
-src/               端侧、后端、GPU 作业与网页代码入口规划
+src/api/           FastAPI 接口、SQLite 数据与照片存储
+src/web/           React + TypeScript 工作台与 Vite 开发服务器
 data/              数据目录约定，仓库跟踪数据说明
 ~~~
 
