@@ -1,10 +1,10 @@
 # 源码布局
 
-视觉阶段以独立命令行作业读写本地文件。各作业记录冻结的输入、工具参数及产物，供现有查看器和后续工作台使用。
+视觉作业在开发机和云 GPU 使用相同的命令行和文件约定。各作业记录冻结的输入、参数及产物，供查看器和工作台使用。 [云 GPU 试跑](../docs/design/cloud-pilot.md)
 
 | 目录 | 阶段与职责 |
 | --- | --- |
-| `workers/` | 本阶段建设。DA3 多视角点云与按需深度图，COLMAP、Brush 及高斯资产导出。 |
+| `workers/` | 本阶段建设。视频抽帧、DA3 多视角点云与按需深度图、COLMAP、Brush 及高斯资产导出。 |
 | `web/` | 工作台集成阶段。球体与展品摆放、球载相机、点云和高斯查看。 |
 | `api/` | 工作台集成阶段确认服务接口。管理场景、布景版本、照片批次、作业和产物。 |
 | `edge/` | 实体球接入阶段。设备拍照、缓存和传输。 |
@@ -36,3 +36,13 @@ python .\src\workers\reconstruct_gaussians.py --brush-exe $brush --splat-transfo
 
 - [点云作业](workers/point_cloud.py) · [3DGS 作业](workers/reconstruct_gaussians.py)
 - [工具版本、权重与复现配置](../docs/design/implementation-guide.md)
+
+## 视频抽帧
+
+安装 FFmpeg 及 Python 3.11 或更新版。先对有重叠的短片段按 2 帧/秒试采样，例如从第 0 秒开始的 12 秒，最多取 24 张候选图。
+
+```powershell
+python -m src.workers.extract_frames .\data\scene.mp4 --start 0 --duration 12 --fps 2 --max-frames 24 --output-dir .\data\video-candidates
+```
+
+输出有序 RGB PNG 和记录原视频 SHA-256、截取参数、FFmpeg 版本的 `manifest.json`。筛掉重复、模糊或缺少重叠的画面后，按采集顺序提交同一组图片至点云或高斯作业。下一轮改采样频率或区间时使用新的输出目录。 [视频抽帧作业](workers/extract_frames.py) · [视频与云端重建](../docs/design/cloud-pilot.md#4-虚拟球自有视频与预制公开资产)
