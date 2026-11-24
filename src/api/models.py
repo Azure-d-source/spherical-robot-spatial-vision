@@ -65,6 +65,8 @@ class RegistrationCoverage(BaseModel):
 class JobArtifact(BaseModel):
     filename: str
     url: str
+    size_bytes: int | None = None
+    frame_id: str | None = None
 
 
 class Job(JobInput):

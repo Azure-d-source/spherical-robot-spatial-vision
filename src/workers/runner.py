@@ -1,4 +1,4 @@
-"""Run 3DGS jobs against the workbench API from a separate process."""
+"""Run DA3 and 3DGS jobs against the workbench API from a separate process."""
 
 import argparse
 import json
@@ -13,7 +13,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .registration import ExecutionError
-from .splat_executor import execute
+from .splat_executor import execute, execute_points
 
 log = logging.getLogger(__name__)
 
@@ -61,16 +61,19 @@ def run_job(args, job, stopping):
 
     try:
         try:
-            finished = execute(job, args.data_dir, args.python, args.brush, args.splat_transform, cancelled)
+            if job["kind"] == "splat":
+                finished = execute(job, args.data_dir, args.python, args.brush, args.splat_transform, cancelled)
+            else:
+                finished = execute_points(job, args.data_dir, args.da3_python, args.da3_model, cancelled)
         except (ExecutionError, OSError) as error:
-            log.error("3DGS job %s failed: %s", job["job_id"], error)
+            log.error("%s job %s failed: %s", job["kind"], job["job_id"], error)
             if not cancelled():
                 code = error.code if isinstance(error, ExecutionError) else "EXECUTOR_ERROR"
                 post(args.api_url, path + "/fail", {**lease, "error_code": code})
         else:
             if finished and not cancelled():
                 result = post(args.api_url, path + "/complete", lease)
-                log.info("3DGS job %s: %s", job["job_id"], result["status"])
+                log.info("%s job %s: %s", job["kind"], job["job_id"], result["status"])
     finally:
         done.set()
         pulse.join()
@@ -80,14 +83,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--data-dir", type=Path, default=os.environ.get("SPATIAL_DATA_DIR", "data/runtime"))
-    parser.add_argument("--python", default=os.environ.get("ORBIT_GS_PY", sys.executable))
-    parser.add_argument("--brush", default=os.environ.get("ORBIT_BRUSH"),
-                        required="ORBIT_BRUSH" not in os.environ)
+    parser.add_argument("--python", "--gs-python", default=os.environ.get("ORBIT_GS_PY", sys.executable))
+    parser.add_argument("--brush", default=os.environ.get("ORBIT_BRUSH"))
     parser.add_argument("--splat-transform", default=os.environ.get("ORBIT_SOG_CLI"))
+    parser.add_argument("--da3-python", default=os.environ.get("ORBIT_DA3_PY", sys.executable))
+    parser.add_argument("--da3-model", default=os.environ.get("ORBIT_DA3_MODEL"))
     parser.add_argument("--once", action="store_true", help="Process at most one queued job and exit")
     args = parser.parse_args()
     args.api_url = args.api_url.rstrip("/")
     args.data_dir = args.data_dir.resolve()
+    kinds = []
+    if args.da3_model:
+        kinds.extend(["depth", "fusion"])
+    if args.brush:
+        kinds.append("splat")
+    if not kinds:
+        parser.error("Set ORBIT_DA3_MODEL and/or ORBIT_BRUSH")
     logging.basicConfig(level=logging.INFO)
     stopping = Event()
 
@@ -98,11 +109,11 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     while not stopping.is_set():
         try:
-            job = post(args.api_url, "workers/claim", {})
+            job = post(args.api_url, "workers/claim", {"kinds": kinds})
             if job:
                 run_job(args, job, stopping)
         except (OSError, ValueError) as error:
-            log.error("3DGS Worker request failed: %s", error)
+            log.error("Worker request failed: %s", error)
             if args.once or isinstance(error, HTTPError) and error.code == 401:
                 return 1
         if args.once:

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..workers.registration import SPLAT_RECIPES
-from . import splat_jobs, store
+from . import store, worker_jobs
 from .images import MAX_REQUEST, photo_path, read_image, save_image
 from .models import Frame, Job, JobInput, Revision, RevisionInput, Scene, SceneDetail, SceneInput
 from .settings import DEFAULT_WEB_DIST, Settings
@@ -250,7 +250,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(title="绕物成景 · 空间视觉 API", version="0.1.0", lifespan=lifespan)
     application.include_router(router)
-    application.include_router(splat_jobs.router)
+    application.include_router(worker_jobs.router)
     web_dist = settings.web_dist if settings else DEFAULT_WEB_DIST
     application.mount("/", WorkbenchFiles(web_dist.resolve()), name="workbench")
     return application

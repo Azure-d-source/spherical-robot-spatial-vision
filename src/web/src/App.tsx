@@ -19,9 +19,7 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
   const [error, setError] = useState('')
   const [dataTick, reload] = useState(0)
   const seq = useRef(0)
-  const hasActiveSplat = jobs.some(
-    (job) => job.kind === 'splat' && (job.status === 'queued' || job.status === 'running'),
-  )
+  const hasActiveJobs = jobs.some((job) => job.status === 'queued' || job.status === 'running')
   useEffect(() => {
     const controller = new AbortController()
     const version = ++seq.current
@@ -50,7 +48,7 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
   }, [scene.scene_id, revisionTick, dataTick])
 
   useEffect(() => {
-    if (!hasActiveSplat || loading) return
+    if (!hasActiveJobs || loading) return
     let timer: ReturnType<typeof setTimeout> | undefined
     let request: AbortController | undefined
     let active = true
@@ -88,7 +86,7 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
       pause()
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [scene.scene_id, hasActiveSplat, loading])
+  }, [scene.scene_id, hasActiveJobs, loading])
   function uploaded(accepted: Frame[]) {
     setNotice(`已上传 ${accepted.length} 张照片。`)
     preview(accepted[accepted.length - 1].frame_id)

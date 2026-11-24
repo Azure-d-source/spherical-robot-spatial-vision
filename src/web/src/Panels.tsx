@@ -177,7 +177,7 @@ export function JobsPanel({
     (j) => j.revision_id === revision?.revision_id && j.kind === kind && j.recipe_version === recipe,
   )
   const results = jobs.filter(
-    (job) => job.revision_id === revision?.revision_id && job.kind === 'splat'
+    (job) => job.revision_id === revision?.revision_id
       && (job.status === 'succeeded' || job.status === 'failed'),
   )
   return (
@@ -270,7 +270,7 @@ export function JobsPanel({
               </p>
             </>
           ) : (
-            <p className="hint">点云任务保存到队列，等待点云执行器接入。</p>
+            <p className="hint">点云任务会生成 GLB 和逐张深度预览。</p>
           )}
           <button
             className="primary"
@@ -283,11 +283,15 @@ export function JobsPanel({
       </section>
       {results.length > 0 && (
         <section className="card span-all">
-          <div className="card-heading"><h2>批次 v{revision?.version} 的 3DGS 结果</h2></div>
+          <div className="card-heading"><h2>批次 v{revision?.version} 的作业结果</h2></div>
           <div className="form-body">
             {results.map((job) => (
               <div className="splat-result" key={job.job_id}>
-                <strong>{job.recipe_version === 'public-32-v1' ? '公开 32 图验收' : '普通重建'}</strong>
+                <strong>
+                  {job.kind === 'splat'
+                    ? job.recipe_version === 'public-32-v1' ? '公开 32 图验收' : '普通重建'
+                    : kinds[job.kind]}
+                </strong>
                 {job.registration && (
                   <div className="hint">
                     已注册 {job.registration.registered_images}/{job.registration.total_images} 张

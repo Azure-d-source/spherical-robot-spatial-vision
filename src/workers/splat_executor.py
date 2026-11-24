@@ -8,6 +8,7 @@ from .process_group import start_process
 from .registration import ExecutionError, SPLAT_RECIPES
 
 SCRIPT = Path(__file__).with_name("reconstruct_gaussians.py")
+POINT_SCRIPT = Path(__file__).with_name("point_cloud.py")
 
 
 def prepare_inputs(frames, photos, attempt_dir):
@@ -35,18 +36,30 @@ def execute(job, data_dir, python, brush, splat_transform, cancelled):
     recipe = SPLAT_RECIPES.get(job["recipe_version"])
     if recipe is None:
         raise ExecutionError("EXECUTOR_ERROR", "未知的 3DGS 配方。")
+    command = [python, str(SCRIPT), "--brush-exe", brush, "--steps", str(recipe.steps)]
+    if splat_transform:
+        command.extend(("--splat-transform-cli", splat_transform))
+    return execute_cli(job, data_dir, command, cancelled)
+
+
+def execute_points(job, data_dir, python, model, cancelled):
+    if job["recipe_version"] != "v1":
+        raise ExecutionError("EXECUTOR_ERROR", "未知的 DA3 配方。")
+    expected = len(job["frames"])
+    if (job["kind"] == "depth" and expected != 1) or (job["kind"] == "fusion" and expected < 2):
+        raise ExecutionError("EXECUTOR_ERROR", "DA3 作业和批次照片张数不匹配。")
+    command = [python, str(POINT_SCRIPT), "--model-dir", model, "--device", "cuda", "--with-depth"]
+    return execute_cli(job, data_dir, command, cancelled)
+
+
+def execute_cli(job, data_dir, command, cancelled):
     if cancelled():
         return False
     attempt_dir = data_dir / "staging" / job["job_id"] / f"attempt-{job['attempt']}"
     attempt_dir.mkdir(parents=True, exist_ok=False)
     files = prepare_inputs(job["frames"], data_dir / "photos", attempt_dir)
     output = attempt_dir / "out"
-    command = [
-        python, str(SCRIPT), "--output-dir", str(output), "--brush-exe", brush,
-        "--steps", str(recipe.steps),
-    ]
-    if splat_transform:
-        command.extend(("--splat-transform-cli", splat_transform))
+    command[2:2] = ["--output-dir", str(output)]
     command.extend(map(str, files))
     if cancelled():
         return False

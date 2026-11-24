@@ -1,4 +1,5 @@
 import json
+import struct
 import sys
 import unittest
 from argparse import Namespace
@@ -99,7 +100,7 @@ class WorkbenchRegistrationTests(unittest.TestCase):
         response.raise_for_status()
         return response.json() if response.status_code != 204 else None
 
-    def create_job(self, frame_count, recipe):
+    def create_job(self, frame_count, recipe, kind="splat"):
         scene = self.post("/api/scenes", {"title": recipe, "source": "sample"})
         base = f"/api/scenes/{scene['scene_id']}"
         frames = []
@@ -114,7 +115,7 @@ class WorkbenchRegistrationTests(unittest.TestCase):
             frames.append(response.json()["frame_id"])
         revision = self.post(base + "/revisions", {"frame_ids": frames})
         job = self.post("/api/jobs", {
-            "kind": "splat", "revision_id": revision["revision_id"], "recipe_version": recipe,
+            "kind": kind, "revision_id": revision["revision_id"], "recipe_version": recipe,
         })
         return job["job_id"], frames
 
@@ -185,3 +186,43 @@ class WorkbenchRegistrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error_code"], "INSUFFICIENT_REGISTRATION")
         self.assertEqual(result["artifacts"], [])
+
+    def test_fusion_uses_da3_interpreter_and_publishes_frame_previews(self):
+        self.create_job(3, "v1")
+        job_id, frames = self.create_job(2, "v1", kind="fusion")
+        claim = self.post("/api/internal/workers/claim", {"kinds": ["fusion", "splat"]}, headers=self.headers)
+        self.assertEqual(claim["job_id"], job_id)
+
+        fake_da3 = self.root / "fake_da3.py"
+        payload = json.dumps({
+            "accessors": [{"count": 1}], "meshes": [{"primitives": [{"mode": 0, "attributes": {"POSITION": 0}}]}],
+        }).encode()
+        payload += b" " * (-len(payload) % 4)
+        glb = struct.pack("<4sIII4s", b"glTF", 2, len(payload) + 20, len(payload), b"JSON") + payload
+        fake_da3.write_text(
+            "import json, sys\nfrom pathlib import Path\nfrom PIL import Image\n"
+            "out = Path(sys.argv[2])\nassert '--with-depth' in sys.argv and not out.exists()\n"
+            "(out / 'depth_vis').mkdir(parents=True)\n"
+            f"(out / 'scene.glb').write_bytes({glb!r})\n"
+            "frames = []\nfor index in range(2):\n"
+            "    preview = f'depth_vis/{index:04d}.jpg'\n"
+            "    Image.new('RGB', (8, 4)).save(out / preview)\n"
+            "    frames.append({'depth_preview': preview})\n"
+            "manifest = {'frames': frames, 'result': {'point_cloud': 'scene.glb', 'point_count': 1}}\n"
+            "(out / 'manifest.json').write_text(json.dumps(manifest))\n", encoding="utf-8",
+        )
+        args = Namespace(api_url="unused", data_dir=self.root, python="unavailable-gs-interpreter",
+                         da3_python=sys.executable, da3_model="unused")
+        with patch.object(splat_executor, "POINT_SCRIPT", fake_da3):
+            with patch.object(runner, "post", side_effect=lambda _url, path, payload: self.post(
+                "/api/internal/" + path, payload, headers=self.headers
+            )):
+                runner.run_job(args, claim, Event())
+        result = self.client.get(f"/api/jobs/{job_id}").json()
+        self.assertEqual(result["status"], "succeeded")
+        preview_ids = [a["frame_id"] for a in result["artifacts"] if a["filename"].endswith(".jpg")]
+        self.assertEqual(preview_ids, frames)
+        for artifact in result["artifacts"]:
+            response = self.client.get(artifact["url"])
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(response.content), artifact["size_bytes"])
