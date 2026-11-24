@@ -4,7 +4,7 @@
 
 ## 本地启动工作台
 
-当前开发版支持创建场景、上传并预览原图、将选中的照片冻结为批次，以及提交和查看计算任务。SQLite 保存任务记录，原图写入本地磁盘。GPU 计算进程待接入，提交的任务会保留在队列中。
+当前开发版支持创建场景、上传并预览原图、将选中的照片冻结为批次，以及提交和查看计算任务。SQLite 保存任务记录，原图写入本地磁盘。启动 3DGS Worker 后可运行重建任务并下载产物。深度与点云任务保留在队列中。
 
 以下命令在仓库根目录执行。开发环境使用 Python 3.12 和 Node.js 22.12 或更高版本。首次运行先安装依赖并构建网页。
 
@@ -18,9 +18,23 @@ npm --prefix src/web run build
 
 打开 [本地工作台](http://127.0.0.1:8000/) 或 [API 交互文档](http://127.0.0.1:8000/docs)。在 macOS 或 Linux 下将上述 Python 虚拟环境入口换成 `.venv/bin/python`。
 
-第一次试用时，可创建一个“桌面玩具”场景，分别选择正面和背面机位并上传两张不同照片，按拍摄顺序勾选它们，点击 **确认照片批次**。在 **批次与任务** 里选择多图点云融合或 3DGS 实景重建，提交后即可查看对应批次和排队状态。
+第一次试用时，可创建一个“桌面玩具”场景，上传至少三张不同的照片，再按拍摄顺序勾选并点击 **确认照片批次**。在 **批次与任务** 里选择 **3DGS 实景重建**，查看排队、处理状态和当前批次的配准结果。
 
 修改网页时，可保持 API 运行，在另一个终端执行 `npm --prefix src/web run dev`，打开 Vite 输出的地址。开发服务器把 `/api` 请求转给本机 8000 端口。也可以先启动 API，再构建网页，构建成功后直接打开工作台。修改后端时可在 Uvicorn 命令末尾增加 `--reload --reload-dir src/api`。运行数据默认保存在 `data/runtime/`，可在启动 API 前通过环境变量 `SPATIAL_DATA_DIR` 指定其他目录。本机开发服务绑定回环地址，供本机设备使用。
+
+### 启动 3DGS Worker
+
+按 [视觉工具说明](https://github.com/Azure-d-source/spherical-robot-spatial-vision/blob/2c36d8f/src/README.md) 准备可运行 PyCOLMAP 和 Pillow 的 Python 环境及 Brush。保持 API 运行，在仓库根目录的另一个终端执行，两个进程使用同一 `SPATIAL_DATA_DIR`。
+
+```powershell
+$env:ORBIT_GS_PY = 'D:\vision-envs\gs\Scripts\python.exe'
+$env:ORBIT_BRUSH = 'D:\vision-tools\brush_app.exe'
+.\.venv\Scripts\python.exe -m src.workers.runner --api-url http://127.0.0.1:8000
+```
+
+设置 `ORBIT_SOG_CLI` 可追加 SOG 输出。其他主机访问 Worker 内部接口时，两端需配置同一个 `SPATIAL_WORKER_TOKEN`。在同一张 GPU 上启动一个 Worker。
+
+普通配方 `v1` 接受可用的部分注册。最大组件必须注册至少三张照片且有稀疏点，工作台显示已注册张数和未注册机位。公开 32 图验收配方 `public-32-v1` 执行 400 步短轮，要求 32/32 注册后才发布产物。
 
 ## 一次扫描如何完成
 

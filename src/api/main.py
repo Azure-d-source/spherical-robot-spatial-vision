@@ -7,25 +7,20 @@ from pathlib import Path, PureWindowsPath
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import store
+from ..workers.registration import SPLAT_RECIPES
+from . import splat_jobs, store
 from .images import MAX_REQUEST, photo_path, read_image, save_image
 from .models import Frame, Job, JobInput, Revision, RevisionInput, Scene, SceneDetail, SceneInput
 from .settings import DEFAULT_WEB_DIST, Settings
+from .store import Storage
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-def get_store(request: Request) -> store.Store:
-    return request.app.state.store
-
-
-Storage = Annotated[store.Store, Depends(get_store)]
 
 
 def timestamp():
@@ -199,15 +194,23 @@ def scene_jobs(scene_id: str, storage: Storage):
 
 @router.post("/api/jobs", status_code=202, response_model=Job, tags=["作业"])
 def submit_job(payload: JobInput, storage: Storage):
-    """Persist a queued job. GPU workers will consume the queue in a later integration."""
     with storage.connection(write=True) as db:
-        revision = db.execute("SELECT revision_id FROM revisions WHERE revision_id = ?", (payload.revision_id,)).fetchone()
+        revision = db.execute("SELECT frame_ids FROM revisions WHERE revision_id = ?", (payload.revision_id,)).fetchone()
         if revision is None:
             raise HTTPException(404, "未找到该照片批次")
         args = (payload.revision_id, payload.kind, payload.recipe_version)
         existing = db.execute("SELECT * FROM jobs WHERE revision_id = ? AND kind = ? AND recipe_version = ?", args).fetchone()
         if existing is not None:
-            return dict(existing)
+            return store.job_record(existing)
+        if payload.kind == "splat":
+            if payload.recipe_version not in SPLAT_RECIPES:
+                raise HTTPException(422, "未知的 3DGS 配方")
+            frame_count = len(json.loads(revision["frame_ids"]))
+            if frame_count < 3:
+                raise HTTPException(422, "3DGS 重建至少需要三张不同照片")
+            required = SPLAT_RECIPES[payload.recipe_version].required_frames
+            if required is not None and frame_count != required:
+                raise HTTPException(422, f"此验收配方需要 {required} 张照片")
         job = dict(job_id=uuid4().hex, status="queued", created_at=timestamp(), **payload.model_dump())
         db.execute("""
             INSERT INTO jobs (job_id, revision_id, kind, recipe_version, status, created_at)
@@ -222,7 +225,7 @@ def get_job(job_id: str, storage: Storage):
         row = db.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "未找到该作业")
-    return dict(row)
+    return store.job_record(row)
 
 
 class WorkbenchFiles(StaticFiles):
@@ -247,6 +250,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(title="绕物成景 · 空间视觉 API", version="0.1.0", lifespan=lifespan)
     application.include_router(router)
+    application.include_router(splat_jobs.router)
     web_dist = settings.web_dist if settings else DEFAULT_WEB_DIST
     application.mount("/", WorkbenchFiles(web_dist.resolve()), name="workbench")
     return application

@@ -26,6 +26,15 @@ export interface Job {
   kind: Kind
   status: string
   created_at: string
+  recipe_version: string
+  error_code?: string | null
+  error_message?: string | null
+  registration?: {
+    registered_images: number
+    total_images: number
+    unregistered_frame_ids: string[]
+  } | null
+  artifacts?: { filename: string; url: string }[]
 }
 export const sources: Record<Source, string> = {
   sample: '手动样例',
@@ -84,8 +93,8 @@ export const api = {
   freeze: (id: string, frameIds: string[]) =>
     request<Revision>(scenePath(id) + '/revisions', json({ frame_ids: frameIds })),
   jobs: (id: string, signal?: AbortSignal) => request<Job[]>(scenePath(id) + '/jobs', { signal }),
-  enqueue: (revisionId: string, kind: Kind) =>
-    request<Job>('/jobs', json({ revision_id: revisionId, kind })),
+  enqueue: (revisionId: string, kind: Kind, recipeVersion = 'v1') =>
+    request<Job>('/jobs', json({ revision_id: revisionId, kind, recipe_version: recipeVersion })),
 }
 
 export const errorText = (error: unknown) =>

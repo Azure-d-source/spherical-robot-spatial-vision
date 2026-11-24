@@ -2,8 +2,9 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, Request
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scenes (
@@ -40,6 +41,8 @@ class Store:
         root = data_dir.resolve()
         self.database = root / "workspace.sqlite3"
         self.photos = root / "photos"
+        self.staging = root / "staging"
+        self.artifacts = root / "artifacts"
 
     @contextmanager
     def connection(self, write=False):
@@ -58,12 +61,41 @@ class Store:
 
     def initialize(self):
         self.photos.mkdir(parents=True, exist_ok=True)
+        self.staging.mkdir(exist_ok=True)
+        self.artifacts.mkdir(exist_ok=True)
         db = sqlite3.connect(self.database, timeout=15)
         try:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
         finally:
             db.close()
+        with self.connection(write=True) as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}
+            for name, column in {
+                "attempt": "INTEGER NOT NULL DEFAULT 0",
+                "lease_token_hash": "TEXT",
+                "lease_until": "TEXT",
+                "error_code": "TEXT",
+                "error_message": "TEXT",
+                "result_json": "TEXT",
+                "artifact_directory": "TEXT",
+            }.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {column}")
+
+
+def get_store(request: Request) -> Store:
+    return request.app.state.store
+
+
+Storage = Annotated[Store, Depends(get_store)]
+
+
+def job_record(row):
+    record = dict(row)
+    stored = record.get("result_json")
+    record.update(json.loads(stored) if stored else {})
+    return record
 
 
 def scene_record(db, scene_id):
@@ -96,4 +128,4 @@ def list_jobs(db, scene_id):
         SELECT j.* FROM jobs j JOIN revisions r ON r.revision_id = j.revision_id
         WHERE r.scene_id = ? ORDER BY j.created_at DESC, j.rowid DESC
     """, (scene_id,))
-    return [dict(row) for row in rows]
+    return [job_record(row) for row in rows]

@@ -19,6 +19,9 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
   const [error, setError] = useState('')
   const [dataTick, reload] = useState(0)
   const seq = useRef(0)
+  const hasActiveSplat = jobs.some(
+    (job) => job.kind === 'splat' && (job.status === 'queued' || job.status === 'running'),
+  )
   useEffect(() => {
     const controller = new AbortController()
     const version = ++seq.current
@@ -45,6 +48,47 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
       })
     return () => controller.abort()
   }, [scene.scene_id, revisionTick, dataTick])
+
+  useEffect(() => {
+    if (!hasActiveSplat || loading) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let request: AbortController | undefined
+    let active = true
+
+    function pause() {
+      clearTimeout(timer)
+      request?.abort()
+      request = undefined
+    }
+
+    async function poll() {
+      const controller = new AbortController()
+      request = controller
+      try {
+        const next = await api.jobs(scene.scene_id, controller.signal)
+        if (!controller.signal.aborted) setJobs(next)
+      } catch {
+        // Retry transient errors without discarding the last known results.
+      } finally {
+        if (active && request === controller && !document.hidden) {
+          timer = setTimeout(() => void poll(), 1500)
+        }
+      }
+    }
+
+    function visibilityChanged() {
+      pause()
+      if (!document.hidden) void poll()
+    }
+
+    document.addEventListener('visibilitychange', visibilityChanged)
+    if (!document.hidden) timer = setTimeout(() => void poll(), 1500)
+    return () => {
+      active = false
+      pause()
+      document.removeEventListener('visibilitychange', visibilityChanged)
+    }
+  }, [scene.scene_id, hasActiveSplat, loading])
   function uploaded(accepted: Frame[]) {
     setNotice(`已上传 ${accepted.length} 张照片。`)
     preview(accepted[accepted.length - 1].frame_id)
@@ -73,13 +117,13 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
       setBusy(false)
     }
   }
-  async function enqueue(id: string, kind: Kind) {
+  async function enqueue(id: string, kind: Kind, recipeVersion: string) {
     if (busy) return
     setBusy(true)
     setError('')
     setNotice('')
     try {
-      const job = await api.enqueue(id, kind)
+      const job = await api.enqueue(id, kind, recipeVersion)
       setNotice(job.status === 'queued' ? '任务已入队，等待 GPU Worker。' : '已获取任务状态。')
       reload((v) => v + 1)
     } catch (err) {

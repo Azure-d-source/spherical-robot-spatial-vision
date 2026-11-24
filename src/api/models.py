@@ -56,10 +56,26 @@ class JobInput(BaseModel):
     recipe_version: Identifier = "v1"
 
 
+class RegistrationCoverage(BaseModel):
+    registered_images: int
+    total_images: int
+    unregistered_frame_ids: list[str]
+
+
+class JobArtifact(BaseModel):
+    filename: str
+    url: str
+
+
 class Job(JobInput):
+    model_config = ConfigDict(extra="ignore")
     job_id: str
     status: Literal["queued", "running", "succeeded", "failed"]
     created_at: datetime
+    error_code: str | None = None
+    error_message: str | None = None
+    registration: RegistrationCoverage | None = None
+    artifacts: list[JobArtifact] = Field(default_factory=list)
 
 
 class SceneDetail(Scene):

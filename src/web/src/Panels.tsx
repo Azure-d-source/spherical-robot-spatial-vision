@@ -163,14 +163,22 @@ export function JobsPanel({
   jobs: Job[]
   revisionId: string
   choose: (id: string) => void
-  enqueue: (id: string, kind: Kind) => Promise<void>
+  enqueue: (id: string, kind: Kind, recipeVersion: string) => Promise<void>
   busy: boolean
 }) {
   const revision = revisions.find((item) => item.revision_id === revisionId) ?? revisions[0]
   const [mode, setMode] = useState<'points' | 'splat'>('points')
+  const [splatRecipe, setSplatRecipe] = useState('v1')
   const kind = mode === 'splat' ? 'splat' : revision?.frame_ids.length === 1 ? 'depth' : 'fusion'
+  const recipe = kind === 'splat' ? splatRecipe : 'v1'
+  const frameCount = revision?.frame_ids.length ?? 0
+  const invalidSplat = kind === 'splat' && (frameCount < 3 || (recipe === 'public-32-v1' && frameCount !== 32))
   const existing = jobs.find(
-    (j) => j.revision_id === revision?.revision_id && j.kind === kind && j.status !== 'failed',
+    (j) => j.revision_id === revision?.revision_id && j.kind === kind && j.recipe_version === recipe,
+  )
+  const results = jobs.filter(
+    (job) => job.revision_id === revision?.revision_id && job.kind === 'splat'
+      && (job.status === 'succeeded' || job.status === 'failed'),
   )
   return (
     <div className="job-layout">
@@ -246,16 +254,65 @@ export function JobsPanel({
               <option value="splat">3DGS 实景重建</option>
             </select>
           </label>
-          <p className="hint">任务保存到本地队列，接入 GPU Worker 后可执行。</p>
+          {kind === 'splat' ? (
+            <>
+              <label>
+                重建配方
+                <select value={splatRecipe} onChange={(e) => setSplatRecipe(e.target.value)}>
+                  <option value="v1">普通重建</option>
+                  <option value="public-32-v1">公开 32 图验收</option>
+                </select>
+              </label>
+              <p className="hint">
+                {recipe === 'public-32-v1'
+                  ? '验收要求全部 32 张注册成功。'
+                  : '至少需要 3 张不同照片，有效的部分配准也可以生成结果。'}
+              </p>
+            </>
+          ) : (
+            <p className="hint">点云任务保存到队列，等待点云执行器接入。</p>
+          )}
           <button
             className="primary"
-            disabled={!revision || busy || !!existing}
-            onClick={() => revision && void enqueue(revision.revision_id, kind)}
+            disabled={!revision || busy || !!existing || invalidSplat}
+            onClick={() => revision && void enqueue(revision.revision_id, kind, recipe)}
           >
             {busy ? '正在提交…' : existing ? '该任务已提交' : '提交任务'}
           </button>
         </div>
       </section>
+      {results.length > 0 && (
+        <section className="card span-all">
+          <div className="card-heading"><h2>批次 v{revision?.version} 的 3DGS 结果</h2></div>
+          <div className="form-body">
+            {results.map((job) => (
+              <div className="splat-result" key={job.job_id}>
+                <strong>{job.recipe_version === 'public-32-v1' ? '公开 32 图验收' : '普通重建'}</strong>
+                {job.registration && (
+                  <div className="hint">
+                    已注册 {job.registration.registered_images}/{job.registration.total_images} 张
+                    {job.registration.unregistered_frame_ids.length > 0 && (
+                      <details>
+                        <summary>查看未注册照片</summary>
+                        <ul>
+                          {job.registration.unregistered_frame_ids.map((id) => {
+                            const frame = frames.find((item) => item.frame_id === id)
+                            return <li key={id}>{frame ? frame.filename + ' · ' + frame.view_label : id}</li>
+                          })}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                )}
+                {job.error_message && <p className="error">{job.error_message}（{job.error_code}）</p>}
+                {job.artifacts?.map((artifact) => (
+                  <a key={artifact.filename} href={artifact.url} download>{artifact.filename}</a>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       <section className="card span-all">
         <div className="card-heading">
           <h2>
