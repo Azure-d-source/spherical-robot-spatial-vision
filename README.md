@@ -1,83 +1,28 @@
-# 绕物成景 · 球形机器人端云空间视觉
+# OrbitForge · 球迹视界
 
-面向第四届“东软教育杯”人工智能应用方向的参赛作品。用带单目相机的球形机器人绕一个桌面展品取景，云端处理照片，网页展示从首张深度图到可环绕浏览的 3DGS 实景。首个演示对象是一件有纹理、背面有明显标记的玩具，重建范围覆盖玩具和附近的桌面。
+**球形机器人端云协同三维扫描系统**
 
-## 本地启动工作台
+从球载视角出发，把多视角照片变成可以走近、绕行和回看的三维场景。OrbitForge 将虚拟取景、真实照片与视频、预生成高斯场景接入同一个扫描工作台。开发机负责建立基线，云 GPU 承担重建试跑和参数对照，浏览器负责交互展示。
 
-当前开发版支持创建场景、上传并预览原图、将选中的照片冻结为批次，以及提交和查看计算任务。SQLite 保存任务记录，原图写入本地磁盘。启动 3DGS Worker 后可运行重建任务并下载产物。深度与点云任务保留在队列中。
+## 三条场景路线
 
-以下命令在仓库根目录执行。开发环境使用 Python 3.12 和 Node.js 22.12 或更高版本。首次运行先安装依赖并构建网页。
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r src/api/requirements.txt
-npm --prefix src/web ci
-npm --prefix src/web run build
-.\.venv\Scripts\python.exe -m uvicorn src.api.main:create_app --factory --host 127.0.0.1 --port 8000
-```
-
-打开 [本地工作台](http://127.0.0.1:8000/) 或 [API 交互文档](http://127.0.0.1:8000/docs)。在 macOS 或 Linux 下将上述 Python 虚拟环境入口换成 `.venv/bin/python`。
-
-第一次试用时，可创建一个“桌面玩具”场景，上传至少三张不同的照片，再按拍摄顺序勾选并点击 **确认照片批次**。在 **批次与任务** 里选择 **3DGS 实景重建**，查看排队、处理状态和当前批次的配准结果。
-
-修改网页时，可保持 API 运行，在另一个终端执行 `npm --prefix src/web run dev`，打开 Vite 输出的地址。开发服务器把 `/api` 请求转给本机 8000 端口。也可以先启动 API，再构建网页，构建成功后直接打开工作台。修改后端时可在 Uvicorn 命令末尾增加 `--reload --reload-dir src/api`。运行数据默认保存在 `data/runtime/`，可在启动 API 前通过环境变量 `SPATIAL_DATA_DIR` 指定其他目录。本机开发服务绑定回环地址，供本机设备使用。
-
-### 启动 3DGS Worker
-
-按 [视觉工具说明](https://github.com/Azure-d-source/spherical-robot-spatial-vision/blob/2c36d8f/src/README.md) 准备可运行 PyCOLMAP 和 Pillow 的 Python 环境及 Brush。保持 API 运行，在仓库根目录的另一个终端执行，两个进程使用同一 `SPATIAL_DATA_DIR`。
-
-```powershell
-$env:ORBIT_GS_PY = 'D:\vision-envs\gs\Scripts\python.exe'
-$env:ORBIT_BRUSH = 'D:\vision-tools\brush_app.exe'
-.\.venv\Scripts\python.exe -m src.workers.runner --api-url http://127.0.0.1:8000
-```
-
-设置 `ORBIT_SOG_CLI` 可追加 SOG 输出。其他主机访问 Worker 内部接口时，两端需配置同一个 `SPATIAL_WORKER_TOKEN`。在同一张 GPU 上启动一个 Worker。
-
-普通配方 `v1` 接受可用的部分注册。最大组件必须注册至少三张照片且有稀疏点，工作台显示已注册张数和未注册机位。公开 32 图验收配方 `public-32-v1` 执行 400 步短轮，要求 32/32 注册后才发布产物。
-
-## 一次扫描如何完成
-
-1. **选目标并首拍。** 在网页上选中玩具，板端停稳拍摄并上传。云端用 DA3-BASE 生成相对深度图和初始彩色点云。
-2. **换位补拍。** 按机位清单补拍侧面、背面和顶面。把当前批次的照片交给 DA3 联合处理，网页对比不同批次的点云，并能打开对应原图核对新增表面。
-3. **生成可浏览的实景。** 确认照片后，云端从同批原图用 COLMAP 求相机位姿，再用 Brush 重建 3DGS。网页可从桌面总览切到玩具近景，环绕查看实拍覆盖的表面。
-4. **换成虚拟相机复演。** 在浏览器仿真布景中换机位、生成新 RGB 图像，复用同一个上传、推理和结果查看流程。
-
-作品的重点是把**目标、拍摄机位、原图和三维结果**串在一项可回看的任务里。展品背面的贴纸是现场检验点。补拍后能在原图、融合点云和最终实景中依次核对。点云按补拍批次更新，3DGS 在云端完成重建后由浏览器实时渲染。
-
-## 当前进度
-
-| 模块 | 已验证 | 待完成 |
+| 场景 | 输入与流程 | 要交付的体验 |
 | --- | --- | --- |
-| 深度估计与点云 | 用公开 RGB 样例运行单图和多图 DA3，在网页查看彩色点云 | 自采玩具的目标引导、补拍与版本对比 |
-| 3DGS 实景 | 公开样例 32 张照片全部注册，完整高斯资产已在本机浏览器运行 | 自采画质、答辩机加载，以及真实网络耗时 |
-| 仿真 | 4 个虚拟机位生成 RGB 图像，跑通本机上传、推理和结果取回 | 与真机共用正式任务接口，网页现场可操作 |
-| 球形机器人与云端 | 已明确板端取景上传、GPU 服务处理、浏览器展示的职责 | 球体与相机实装、云端部署、真机完整联调 |
+| **真实公开场景** | 固定一组公开多视角原图，实际运行 COLMAP 与 Brush，导出高斯 PLY 和 SOG。另加载一份标注来源的预生成公开室内资产。 | 浏览由团队重建的真实场景，对照公开资产的加载、轮廓与视角覆盖。 |
+| **自己的视频** | 提前导入手机 MP4，抽取有视差和重叠的关键帧，用同一条重建流程在本机或云 GPU 运行。 | 打开事先重建的书桌或室内局部，从实际拍摄覆盖的区域连续移动视角。 |
+| **仿真球扫描** | 在内嵌工作台摆放展品和虚拟球，球载相机跟随移动。沿实际机位保存 RGB，生成多视角点云和 3DGS。 | 从正面补到背面，用原图核对新增表面。挪动展品后，镜头与新一轮扫描随布局更新。 |
 
-上述模型实验来自独立原型，模型版本、数据与计时条件见 [实测记录](docs/experiments/public-sample-benchmark.md)。当前工作台的开发入口见 [源码目录](src/README.md)。
+同批照片可分别生成**彩色点云**和**可漫游的 3DGS**。点云用于核对补拍覆盖，深度图按需用于诊断。浏览器实时渲染已加载的高斯资产，照片注册、场景优化和导出分别计时。
 
-## 仓库结构
+## 本机基准与云端试验
 
-~~~text
-README.md
-docs/
-  competition/     参赛要求与交付清单
-  design/          项目总览、系统架构与实施步骤
-  experiments/     公开样例的跑通记录与验收依据
-  research/        球形机器人空间视觉调研与历届国奖案例
-src/api/           FastAPI 接口、SQLite 数据与照片存储
-src/web/           React + TypeScript 工作台与 Vite 开发服务器
-data/              数据目录约定，仓库跟踪数据说明
-~~~
+**已经跑通。** RTX 4060 Laptop 上，DA3-BASE 生成了单图与多图点云。公开 DL3DV 样例的 **32 张照片全部注册**，同一高斯资产从 **24.55 MiB PLY 压到 1.89 MiB SOG**。Edge 已验证拖动和移动视角。模拟 10 Mb/s 且启用 HTTP gzip 时，SOG 版本三次首帧中位数为 **2.58 秒**。仿真原型已生成不同机位的 RGB 并运行本机点云推理。 [完整实测与计时口径](docs/experiments/public-sample-benchmark.md)
 
-本机另有 `local/`，存放赛事原通知、早期手册、历史稿和提交暂存目录。共享仓库中的赛事清单可供团队直接复核。
+**本轮工程重点。** 用同一公开批次对照训练步数和画质，准备在 RTX 4090 24 GB 或 RTX 5090 32 GB 上复跑。固定输入与留出视角，记录配准、耗时、显存和浏览性能。通过云机实测后，用已有域名交付可访问的浏览入口。自录视频和仿真工作台沿用同一套视觉产物格式。 [执行方案](docs/design/execution-plan.md) · [云 GPU 试跑与域名发布](docs/design/cloud-pilot.md)
 
-## 开始协作
+## 开发入口
 
-- [项目总览](docs/design/project-overview.md)给出首版范围、功能清单、可行性证据和后续选项。
-- [系统架构](docs/design/platform-architecture.md)明确球形机器人、云端与网页的接口和状态。
-- [实施指南](docs/design/implementation-guide.md)记录复现命令、模块搭建顺序与联调要求。
-- [技术调研](docs/research/spherical-robot-spatial-vision.md)说明球形采集为什么要换位、点云与 3DGS 如何分工，以及画质改进的验证顺序。
-- [参赛与交付清单](docs/competition/submission-checklist.md)记录赛题复核、原创与工具要求、匿名提交和答辩材料。
-
-下一轮先用手机拍一组自有玩具的正、侧、背面和不同高度的重叠照片。用同批输入完成 DA3 点云与 COLMAP + Brush 重建。随后把这组图用作网页和球形机器人接入的一致性样例。
+- [本地启动工作台](src/README.md#本地启动工作台) · [P3 本机 GPU 联调记录](docs/experiments/workbench-gpu-smoke.md)
+- [视觉作业与运行命令](src/README.md#本地视觉作业) · [数据组织](data/README.md)
+- [项目总览](docs/design/project-overview.md) · [系统架构](docs/design/platform-architecture.md) · [实施指南](docs/design/implementation-guide.md)
+- [技术调研](docs/research/spherical-robot-spatial-vision.md) · [参赛与交付清单](docs/competition/submission-checklist.md)
