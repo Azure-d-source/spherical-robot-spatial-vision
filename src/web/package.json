@@ -4,22 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/sync-supersplat.mjs",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "prebuild": "node scripts/sync-supersplat.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/check-viewer-chunks.mjs",
     "preview": "vite preview"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
   "dependencies": {
+    "@playcanvas/supersplat-viewer": "1.43.3",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "three": "0.187.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/three": "0.187.0",
+    "@vitejs/plugin-react": "^5.1.0",
     "typescript": "~5.9.3",
-    "vite": "^7.3.0",
-    "@vitejs/plugin-react": "^5.1.0"
+    "vite": "^7.3.0"
   }
 }

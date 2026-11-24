@@ -414,6 +414,100 @@ h1 {
   flex-direction: column;
   align-self: stretch;
 }
+.viewer-heading,
+.viewer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.75rem 1rem;
+}
+.viewer-heading {
+  border-bottom: 1px solid var(--line);
+}
+.viewer-tabs,
+.camera-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.viewer-tabs button {
+  padding: 0.45rem 0.68rem;
+  border-radius: 5px;
+  color: var(--muted);
+}
+.viewer-tabs button[aria-selected='true'],
+.camera-presets button[aria-pressed='true'] {
+  color: var(--teal);
+  background: #203c3e;
+}
+.viewer-stage .viewport {
+  border: 0;
+  border-radius: 0;
+}
+.viewer-stage .view-content {
+  min-height: 280px;
+}
+.viewer-revision,
+.viewer-tools label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+.viewer-revision select {
+  max-width: 100%;
+}
+.viewer-graphics {
+  position: relative;
+  min-width: 0;
+  height: clamp(260px, 36vw, 460px);
+  background: #131f2a;
+}
+.viewer-graphics canvas,
+.viewer-graphics iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.viewer-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding: 1rem;
+  text-align: center;
+  background: #131f2ae0;
+  color: var(--muted);
+}
+.viewer-empty {
+  display: grid;
+  min-height: 230px;
+  place-content: center;
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--muted);
+}
+.viewer-message {
+  padding: 0.6rem 1rem;
+}
+.viewer-tools input[type='range'] {
+  width: clamp(80px, 12vw, 135px);
+  accent-color: var(--teal);
+}
+.viewer-tools output {
+  min-width: 3ch;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.camera-adjustments {
+  border-top: 1px solid var(--line);
+}
 .view-content {
   background: #131f2a;
   position: relative;

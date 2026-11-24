@@ -7,5 +7,19 @@ export default defineConfig(({ mode }) => {
   const proxy = Object.fromEntries(
     ['/api', '/docs', '/openapi.json'].map((path) => [path, { target, changeOrigin: true }]),
   )
-  return { plugins: [react()], server: { proxy }, preview: { proxy } }
+  return {
+    plugins: [react()],
+    server: { proxy },
+    preview: { proxy },
+    build: {
+      manifest: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.replaceAll('\\', '/').includes('/node_modules/three/')) return 'three'
+          },
+        },
+      },
+    },
+  }
 })

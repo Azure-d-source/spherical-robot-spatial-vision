@@ -116,6 +116,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.client.get("/").text, "<h1>Workbench</h1>")
         self.assertEqual(self.client.get("/api/health").status_code, 200)
 
+    def test_workbench_serves_supersplat_decoder_with_wasm_mime(self):
+        directory = self.dist / "supersplat"
+        directory.mkdir(parents=True)
+        (self.dist / "index.html").write_text("<h1>Workbench</h1>", encoding="utf-8")
+        wasm = b"\x00asm\x01\x00\x00\x00"
+        (directory / "zstd-decoder.wasm").write_bytes(wasm)
+        response = self.client.get("/supersplat/zstd-decoder.wasm")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/wasm")
+        self.assertEqual(response.content, wasm)
+        partial = self.client.get("/supersplat/zstd-decoder.wasm", headers={"Range": "bytes=0-3"})
+        self.assertEqual(partial.status_code, 206)
+        self.assertEqual(partial.headers["content-type"], "application/wasm")
+        self.assertEqual(partial.content, wasm[:4])
+
     def test_upload_retries_preserve_capture_identity(self):
         original = self.upload("camera-1", "blue")
         original.raise_for_status()

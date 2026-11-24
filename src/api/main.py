@@ -238,6 +238,12 @@ class WorkbenchFiles(StaticFiles):
             raise HTTPException(404, "工作台尚未构建")
         await super().__call__(scope, receive, send)
 
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if Path(path).suffix.lower() == ".wasm" and response.status_code in {200, 206}:
+            response.headers["content-type"] = "application/wasm"
+        return response
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager

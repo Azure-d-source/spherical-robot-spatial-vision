@@ -3,20 +3,31 @@ import { api, errorText, sources } from './api'
 import type { Frame, Job, Kind, Revision, Scene } from './api'
 import { SceneForm, UploadForm } from './Forms'
 import { Gallery, JobsPanel, Viewport } from './Panels'
+import { ViewerStage } from './components/viewers/ViewerStage'
+import type { ViewerMode } from './components/viewers/ViewerStage'
 
 function newestJobs(jobs: Job[]) {
   return [...jobs].sort(
-    (a, b) => b.created_at.localeCompare(a.created_at) || b.job_id.localeCompare(a.job_id),
+    (a, b) =>
+      b.created_at.localeCompare(a.created_at) ||
+      b.job_id.localeCompare(a.job_id),
   )
 }
 
-function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number }) {
+function Studio({
+  scene,
+  revisionTick,
+}: {
+  scene: Scene
+  revisionTick: number
+}) {
   const [frames, setFrames] = useState<Frame[]>([])
   const [revisions, setRevisions] = useState<Revision[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [previewId, preview] = useState('')
   const [revisionId, choose] = useState('')
+  const [viewerMode, setViewerMode] = useState<ViewerMode>('camera')
   const [tab, setTab] = useState<'capture' | 'jobs'>('capture')
   const [view, setView] = useState('正面')
   const [busy, setBusy] = useState(false)
@@ -25,7 +36,9 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
   const [error, setError] = useState('')
   const [dataTick, reload] = useState(0)
   const seq = useRef(0)
-  const hasActiveJobs = jobs.some((job) => job.status === 'queued' || job.status === 'running')
+  const hasActiveJobs = jobs.some(
+    (job) => job.status === 'queued' || job.status === 'running',
+  )
   useEffect(() => {
     const controller = new AbortController()
     const version = ++seq.current
@@ -42,7 +55,9 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
         setFrames(fs)
         setRevisions(rs.sort((a, b) => b.version - a.version))
         setJobs(newestJobs(js))
-        setSelected((old) => old.filter((key) => fs.some((f) => f.frame_id === key)))
+        setSelected((old) =>
+          old.filter((key) => fs.some((f) => f.frame_id === key)),
+        )
       })
       .catch((err) => {
         if (!controller.signal.aborted) setError(errorText(err))
@@ -113,7 +128,9 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
       choose(item.revision_id)
       setSelected([])
       setTab('jobs')
-      setNotice(`已确认批次 v${item.version}，含 ${item.frame_ids.length} 张照片。`)
+      setNotice(
+        `已确认批次 v${item.version}，含 ${item.frame_ids.length} 张照片。`,
+      )
       reload((v) => v + 1)
     } catch (err) {
       setError(errorText(err))
@@ -128,7 +145,11 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
     setNotice('')
     try {
       const job = await api.enqueue(id, kind, recipeVersion)
-      setNotice(job.status === 'queued' ? '任务已入队，等待 GPU Worker。' : '已获取任务状态。')
+      setNotice(
+        job.status === 'queued'
+          ? '任务已入队，等待 GPU Worker。'
+          : '已获取任务状态。',
+      )
       reload((v) => v + 1)
     } catch (err) {
       setError(errorText(err))
@@ -137,6 +158,9 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
     }
   }
   const frame = frames.find((f) => f.frame_id === previewId)
+  const activeRevision =
+    revisions.find((revision) => revision.revision_id === revisionId) ??
+    revisions[0]
   return (
     <>
       <div className="workspace-heading">
@@ -186,40 +210,71 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
       {notice && (
         <div className="notice" role="status">
           {notice}
-          <button className="text-button" aria-label="关闭提示" onClick={() => setNotice('')}>
+          <button
+            className="text-button"
+            aria-label="关闭提示"
+            onClick={() => setNotice('')}
+          >
             关闭
           </button>
         </div>
       )}
-      {tab === 'capture' ? (
-        <div className="capture-grid">
-          <Viewport frame={frame} view={view} reset={() => preview('')} />
-          <UploadForm sceneId={scene.scene_id} view={view} setView={setView} onFrames={uploaded} />
-          <Gallery
-            frames={frames}
-            selected={selected}
-            previewId={previewId}
-            preview={preview}
-            busy={busy || loading}
-            clear={() => setSelected([])}
-            selectAll={() => setSelected(frames.map((f) => f.frame_id))}
-            toggle={(id) =>
-              setSelected((old) => (old.includes(id) ? old.filter((f) => f !== id) : [...old, id]))
-            }
-            freeze={() => void freeze()}
-          />
-        </div>
-      ) : (
-        <JobsPanel
-          frames={frames}
+      <div className="capture-grid">
+        <ViewerStage
+          className={tab === 'jobs' ? 'span-all' : undefined}
+          sceneId={scene.scene_id}
+          revision={activeRevision}
           revisions={revisions}
           jobs={jobs}
-          revisionId={revisionId}
-          choose={choose}
-          enqueue={enqueue}
-          busy={busy || loading}
+          frame={frame}
+          view={view}
+          mode={viewerMode}
+          onMode={setViewerMode}
+          onRevision={choose}
+          onCaptured={(captured) => uploaded([captured])}
+          resetFrame={() => preview('')}
         />
-      )}
+        {tab === 'capture' ? (
+          <>
+            <UploadForm
+              sceneId={scene.scene_id}
+              view={view}
+              setView={setView}
+              onFrames={uploaded}
+            />
+            <Gallery
+              frames={frames}
+              selected={selected}
+              previewId={previewId}
+              preview={(id) => {
+                preview(id)
+                setViewerMode('camera')
+              }}
+              busy={busy || loading}
+              clear={() => setSelected([])}
+              selectAll={() => setSelected(frames.map((f) => f.frame_id))}
+              toggle={(id) =>
+                setSelected((old) =>
+                  old.includes(id) ? old.filter((f) => f !== id) : [...old, id],
+                )
+              }
+              freeze={() => void freeze()}
+            />
+          </>
+        ) : (
+          <div className="span-all">
+            <JobsPanel
+              frames={frames}
+              revisions={revisions}
+              jobs={jobs}
+              revisionId={activeRevision?.revision_id ?? ''}
+              choose={choose}
+              enqueue={enqueue}
+              busy={busy || loading}
+            />
+          </div>
+        )}
+      </div>
     </>
   )
 }
@@ -230,7 +285,9 @@ export function App() {
   const [creating, setCreating] = useState(false)
   const [tick, refresh] = useState(0)
   const [error, setError] = useState('')
-  const [health, setHealth] = useState<'connecting' | 'online' | 'offline'>('connecting')
+  const [health, setHealth] = useState<'connecting' | 'online' | 'offline'>(
+    'connecting',
+  )
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     const controller = new AbortController()
@@ -239,7 +296,8 @@ export function App() {
     api
       .health(controller.signal)
       .then((body) => {
-        if (!controller.signal.aborted) setHealth(body.status === 'ok' ? 'online' : 'offline')
+        if (!controller.signal.aborted)
+          setHealth(body.status === 'ok' ? 'online' : 'offline')
       })
       .catch(() => {
         if (!controller.signal.aborted) setHealth('offline')
@@ -250,7 +308,9 @@ export function App() {
         if (controller.signal.aborted) return
         setScenes(items)
         setSelected((id) =>
-          items.some((s) => s.scene_id === id) ? id : (items[0]?.scene_id ?? ''),
+          items.some((s) => s.scene_id === id)
+            ? id
+            : (items[0]?.scene_id ?? ''),
         )
       })
       .catch((err) => {
@@ -262,14 +322,21 @@ export function App() {
     return () => controller.abort()
   }, [tick])
   function created(scene: Scene) {
-    setScenes((old) => [scene, ...old.filter((s) => s.scene_id !== scene.scene_id)])
+    setScenes((old) => [
+      scene,
+      ...old.filter((s) => s.scene_id !== scene.scene_id),
+    ])
     setSelected(scene.scene_id)
     setCreating(false)
     setError('')
     refresh((t) => t + 1)
   }
   const scene = scenes.find((s) => s.scene_id === selected)
-  const status = { connecting: '连接中', online: 'API 在线', offline: 'API 离线' }[health]
+  const status = {
+    connecting: '连接中',
+    online: 'API 在线',
+    offline: 'API 离线',
+  }[health]
   return (
     <div className="shell">
       <header className="topbar">
@@ -284,7 +351,11 @@ export function App() {
           <i className={health} />
           {status}
         </div>
-        <button className="refresh" onClick={() => refresh((t) => t + 1)} disabled={loading}>
+        <button
+          className="refresh"
+          onClick={() => refresh((t) => t + 1)}
+          disabled={loading}
+        >
           <span aria-hidden="true">↻</span> 刷新
         </button>
       </header>
@@ -299,13 +370,18 @@ export function App() {
         <nav aria-label="场景列表">
           {scenes.map((s) => (
             <button
-              className={'scene-link' + (s.scene_id === selected && !creating ? ' active' : '')}
+              className={
+                'scene-link' +
+                (s.scene_id === selected && !creating ? ' active' : '')
+              }
               key={s.scene_id}
               onClick={() => {
                 setSelected(s.scene_id)
                 setCreating(false)
               }}
-              aria-current={s.scene_id === selected && !creating ? 'true' : undefined}
+              aria-current={
+                s.scene_id === selected && !creating ? 'true' : undefined
+              }
             >
               <span className="cube-icon" aria-hidden="true">
                 ◇
@@ -332,7 +408,10 @@ export function App() {
         {error && (
           <div className="notice error" role="alert">
             {error}
-            <button className="text-button" onClick={() => refresh((t) => t + 1)}>
+            <button
+              className="text-button"
+              onClick={() => refresh((t) => t + 1)}
+            >
               重试
             </button>
           </div>
@@ -350,10 +429,15 @@ export function App() {
                 <h1>采集工作台</h1>
               </div>
             </div>
-            <p className="intro">创建场景，按机位采集照片，并将确认的批次提交给三维重建任务。</p>
+            <p className="intro">
+              创建场景，按机位采集照片，并将确认的批次提交给三维重建任务。
+            </p>
             <div className="capture-grid welcome">
               <Viewport view="正面" />
-              <SceneForm created={created} cancel={scene ? () => setCreating(false) : undefined} />
+              <SceneForm
+                created={created}
+                cancel={scene ? () => setCreating(false) : undefined}
+              />
             </div>
           </>
         )}
