@@ -2,6 +2,8 @@ import { lazy, Suspense, useId } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Viewport } from '../../Panels'
 import type { Frame, Job, Revision } from '../../api'
+import { layoutTitle } from '../../simulationLayout'
+import type { SimulationLayout } from '../../simulationLayout'
 import SuperSplatFrame from './SuperSplatFrame'
 
 const PointCloudViewer = lazy(() => import('./PointCloudViewer'))
@@ -19,6 +21,7 @@ type Props = {
   sceneId: string
   revision?: Revision
   revisions: Revision[]
+  revisionLayouts: Map<string, string>
   jobs: Job[]
   frame?: Frame
   view: string
@@ -26,7 +29,9 @@ type Props = {
   className?: string
   onMode: (mode: ViewerMode) => void
   onRevision: (id: string) => void
-  onCaptured: (frame: Frame) => void
+  layout: SimulationLayout
+  onLayout: (layout: SimulationLayout) => void
+  onCaptured: (frames: Frame[]) => void
   resetFrame: () => void
 }
 
@@ -61,6 +66,7 @@ export function ViewerStage({
   sceneId,
   revision,
   revisions,
+  revisionLayouts,
   jobs,
   frame,
   view,
@@ -68,6 +74,8 @@ export function ViewerStage({
   className,
   onMode,
   onRevision,
+  layout,
+  onLayout,
   onCaptured,
   resetFrame,
 }: Props) {
@@ -127,6 +135,7 @@ export function ViewerStage({
               {revisions.map((item) => (
                 <option key={item.revision_id} value={item.revision_id}>
                   v{item.version} · {item.frame_ids.length} 张
+                  {revisionLayouts.has(item.revision_id) && ` · ${layoutTitle(revisionLayouts.get(item.revision_id)!)}`}
                 </option>
               ))}
             </select>
@@ -164,7 +173,7 @@ export function ViewerStage({
               </p>
             ))}
           {mode === 'virtual' && (
-            <VirtualCameraCanvas sceneId={sceneId} onCaptured={onCaptured} />
+            <VirtualCameraCanvas sceneId={sceneId} layout={layout} onLayout={onLayout} onCaptured={onCaptured} />
           )}
         </Suspense>
       </div>

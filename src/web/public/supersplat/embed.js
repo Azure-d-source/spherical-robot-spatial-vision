@@ -29,6 +29,21 @@ addEventListener('message', (event) => {
     dispose()
 })
 
+async function readCamera() {
+  try {
+    const response = await fetch(new URL('manifest.json', content))
+    if (!response.ok) return null
+    const { viewer_camera: camera } = await response.json()
+    const validVector = (value) =>
+      Array.isArray(value) && value.length === 3 && value.every(Number.isFinite)
+    if (validVector(camera?.position) && validVector(camera.target) && camera.fov === 40)
+      return camera
+  } catch {
+    // Previously published assets can still be framed from their bounds.
+  }
+  return null
+}
+
 try {
   if (
     content.origin !== location.origin ||
@@ -36,12 +51,18 @@ try {
   ) {
     throw new Error('Unsupported scene URL')
   }
-  const response = await fetch(content)
+  const [response, camera] = await Promise.all([fetch(content), readCamera()])
   if (!response.ok) throw new Error('Could not download scene')
+  const settings = camera
+    ? fetch('./settings.json').then((response) => response.json()).then((defaults) => ({
+        ...defaults,
+        cameras: [{ initial: camera }],
+      }))
+    : './settings.json'
   if (!disposed) {
     viewer = await createViewer({
       container: stage,
-      settings: './settings.json',
+      settings,
       contentUrl: content.href,
       contents: Promise.resolve(response),
       renderer: query.has('webgl') ? 'webgl' : 'webgpu',
@@ -50,7 +71,8 @@ try {
     })
     function showScene() {
       if (disposed) return
-      viewer.frameScene()
+      if (camera) viewer.resetCamera()
+      else viewer.frameScene()
       report('ready')
     }
     if (disposed) viewer?.destroy()

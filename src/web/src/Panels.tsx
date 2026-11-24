@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { kinds, timeLabel } from './api'
 import type { Frame, Job, Kind, Revision } from './api'
 import { OrbitView } from './OrbitView'
+import { frameLabel, layoutTitle } from './simulationLayout'
 
 export function Viewport({
   frame,
@@ -44,7 +45,7 @@ export function Viewport({
         <span className="ellipsize" title={frame?.filename}>
           {frame?.filename ?? '拍摄方位参考'}
         </span>
-        <span className="meta-right">{frame?.view_label ?? view}</span>
+        <span className="meta-right">{frame ? frameLabel(frame.view_label) : view}</span>
       </div>
     </section>
   )
@@ -52,6 +53,9 @@ export function Viewport({
 
 export function Gallery({
   frames,
+  layouts,
+  layout,
+  showLayout,
   selected,
   toggle,
   preview,
@@ -62,6 +66,9 @@ export function Gallery({
   selectAll,
 }: {
   frames: Frame[]
+  layouts: string[]
+  layout: string
+  showLayout: (key: string) => void
   selected: string[]
   toggle: (id: string) => void
   preview: (id: string) => void
@@ -87,6 +94,14 @@ export function Gallery({
           </button>
         )}
       </div>
+      {layouts.length > 1 && (
+        <label className="viewer-tools">
+          采集布局
+          <select value={layout} onChange={(event) => showLayout(event.target.value)}>
+            {layouts.map((key) => <option key={key} value={key}>{layoutTitle(key)}</option>)}
+          </select>
+        </label>
+      )}
       {frames.length ? (
         <>
           <p className="instructions">点击原图预览，按勾选顺序加入批次。</p>
@@ -117,7 +132,7 @@ export function Gallery({
                   </label>
                   <div className="frame-caption">
                     <strong title={f.filename}>{f.filename}</strong>
-                    <small>{f.view_label}</small>
+                    <small>{frameLabel(f.view_label)}</small>
                   </div>
                 </article>
               )
@@ -152,17 +167,21 @@ const statuses: Record<string, string> = {
 export function JobsPanel({
   frames,
   revisions,
+  revisionLayouts,
   jobs,
   revisionId,
   choose,
+  preview,
   enqueue,
   busy,
 }: {
   frames: Frame[]
   revisions: Revision[]
+  revisionLayouts: Map<string, string>
   jobs: Job[]
   revisionId: string
   choose: (id: string) => void
+  preview: (id: string) => void
   enqueue: (id: string, kind: Kind, recipeVersion: string) => Promise<void>
   busy: boolean
 }) {
@@ -200,7 +219,10 @@ export function JobsPanel({
                   onClick={() => choose(r.revision_id)}
                 >
                   <strong>批次 v{r.version}</strong>
-                  <span>{r.frame_ids.length} 张照片</span>
+                  <span>
+                    {r.frame_ids.length} 张照片
+                    {revisionLayouts.has(r.revision_id) && ` · ${layoutTitle(revisionLayouts.get(r.revision_id)!)}`}
+                  </span>
                   <small>{timeLabel(r.created_at)}</small>
                 </button>
               </li>
@@ -220,7 +242,8 @@ export function JobsPanel({
                         <a href={frame.image_url} target="_blank" rel="noreferrer">
                           {frame.filename}
                         </a>
-                        <small>{frame.view_label}</small>
+                        <small>{frameLabel(frame.view_label)}</small>
+                        <button className="text-button" onClick={() => preview(id)}>工作台预览</button>
                       </>
                     ) : (
                       id

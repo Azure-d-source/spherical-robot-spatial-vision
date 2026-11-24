@@ -124,6 +124,7 @@ def claim(storage: Storage, payload: ClaimInput = ClaimInput()):
         "lease_token": token, "lease_seconds": int(LEASE.total_seconds()), "attempt": attempt,
         "frames": [{
             "frame_id": frame["frame_id"], "sha256": frame["sha256"],
+            "view_label": frame["view_label"], "width": frame["width"], "height": frame["height"],
             "filename": photo_path(storage.photos, frame["sha256"], frame["media_type"]).name,
         } for frame in frames],
     }
@@ -191,6 +192,7 @@ def stage_splat(output, snapshot, manifest, frames, recipe):
         shutil.copyfile(path, snapshot / name)
     return {"registration": coverage}, [{"filename": name} for name in names], {
         "registration": coverage, "seconds_by_stage": manifest.get("seconds_by_stage", {}),
+        "viewer_camera": manifest["colmap"].get("viewer_camera"),
     }
 
 

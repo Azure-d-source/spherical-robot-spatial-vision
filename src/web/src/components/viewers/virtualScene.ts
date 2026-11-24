@@ -25,11 +25,46 @@ function texture(paint: (context: CanvasRenderingContext2D) => void) {
   return result
 }
 
+function grain(ctx: CanvasRenderingContext2D, seed: number, colors: string[]) {
+  function random() {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+    return seed / 4294967296
+  }
+  for (let i = 0; i < 3000; i++) {
+    ctx.fillStyle = colors[i % colors.length]
+    ctx.fillRect(random() * 512, random() * 512, 1 + random() * 8, 1 + random() * 3)
+  }
+}
+
+function patternedMaterial(base: string, ink: string, tag: string, seed: number) {
+  return new MeshStandardMaterial({
+    roughness: 0.85,
+    map: texture((ctx) => {
+      ctx.fillStyle = base
+      ctx.fillRect(0, 0, 512, 512)
+      grain(ctx, seed, ['#ffffff35', '#13212d55', '#ffffff18'])
+      ctx.strokeStyle = ink
+      ctx.lineWidth = 12
+      ctx.strokeRect(32, 28, 448, 456)
+      ctx.strokeRect(66, 68, 176, 152)
+      ctx.beginPath()
+      ctx.moveTo(288, 85)
+      ctx.lineTo(429, 85)
+      ctx.lineTo(409, 164)
+      ctx.lineTo(286, 188)
+      ctx.stroke()
+      ctx.fillStyle = ink
+      ctx.font = '900 127px monospace'
+      ctx.fillText(tag, 92, 385)
+    }),
+  })
+}
+
 export function createVirtualScene() {
   const scene = new Scene()
   scene.background = new Color('#8ba6ad')
-  scene.add(new HemisphereLight('#e9fbff', '#96826b', 2.4))
-  const sun = new DirectionalLight('#fff0d1', 2.2)
+  scene.add(new HemisphereLight('#e9fbff', '#b5a6a0', 2.1))
+  const sun = new DirectionalLight('#fff0d1', 1.7)
   sun.position.set(-3, 7, 4)
   sun.castShadow = true
   sun.shadow.mapSize.set(1024, 1024)
@@ -55,6 +90,7 @@ export function createVirtualScene() {
         ctx.stroke()
       }
     }
+    grain(ctx, 78, ['#4b31274f', '#f1c58b67', '#61412b60'])
   })
   const tabletop = new Mesh(
     new PlaneGeometry(12, 12),
@@ -65,22 +101,26 @@ export function createVirtualScene() {
   scene.add(tabletop)
 
   const matMap = texture((ctx) => {
-    ctx.fillStyle = '#284e52'
+    ctx.fillStyle = '#30525d'
     ctx.fillRect(0, 0, 512, 512)
-    ctx.strokeStyle = '#639290'
-    ctx.lineWidth = 2
-    for (let i = 16; i < 512; i += 32) {
-      for (let j = 16; j < 512; j += 32) ctx.strokeRect(i - 1, j - 1, 2, 2)
+    const colors = ['#436d70', '#345563', '#5b6673', '#46656a', '#705e53']
+    for (let i = 0; i < 36; i++) {
+      const x = 16 + (i % 6) * 80
+      const y = 16 + Math.floor(i / 6) * 80
+      ctx.fillStyle = colors[(i * 13 + Math.floor(i / 6)) % colors.length]
+      ctx.fillRect(x, y, 77, 77)
+      ctx.strokeStyle = '#b5b79a'
+      ctx.lineWidth = 2
+      ctx.strokeRect(x + 9, y + 10, 56 - (i % 5) * 5, 49 + (i % 4) * 5)
+      ctx.font = 'bold 26px monospace'
+      ctx.fillStyle = i % 4 ? '#d8d6ad' : '#ffd986'
+      ctx.fillText(String.fromCharCode(65 + Math.floor(i / 6)) + (i % 6 + 1), x + 13, y + 38)
+      ctx.fillRect(x + 46, y + 49, 6 + (i % 7) * 2, 4 + (i % 3) * 3)
     }
-    ctx.lineWidth = 6
-    ctx.strokeRect(20, 20, 472, 472)
-    ctx.strokeStyle = '#ffcb84'
-    ctx.beginPath()
-    ctx.moveTo(256, 37)
-    ctx.lineTo(240, 63)
-    ctx.lineTo(272, 63)
-    ctx.closePath()
-    ctx.stroke()
+    grain(ctx, 202, ['#15242c44', '#ece9bf33', '#c0a2783f'])
+    ctx.strokeStyle = '#dfc784'
+    ctx.lineWidth = 4
+    ctx.strokeRect(8, 8, 496, 496)
   })
   const mat = new Mesh(
     new PlaneGeometry(5.6, 5.6),
@@ -93,10 +133,10 @@ export function createVirtualScene() {
 
   const toy = new Group()
   scene.add(toy)
-  const teal = new MeshStandardMaterial({ color: '#297b74', roughness: 0.57 })
-  const orange = new MeshStandardMaterial({ color: '#d58439' })
+  const teal = patternedMaterial('#297b74', '#92bfb1', 'R2', 54)
+  const orange = patternedMaterial('#d58439', '#66391b', '+', 83)
   const dark = new MeshStandardMaterial({ color: '#263841' })
-  const cream = new MeshStandardMaterial({ color: '#efe0b8' })
+  const cream = patternedMaterial('#dfcfab', '#6f715e', '•', 26)
 
   function part(
     width: number,
@@ -167,31 +207,47 @@ export function createVirtualScene() {
   )
   panel(
     texture((ctx) => {
-      ctx.fillStyle = '#efb55e'
+      ctx.fillStyle = '#742049'
       ctx.fillRect(0, 0, 512, 512)
-      ctx.fillStyle = '#2b3739'
-      ctx.fillRect(30, 26, 452, 86)
-      ctx.fillRect(30, 399, 452, 86)
-      ctx.font = 'bold 160px system-ui'
+      ctx.fillStyle = '#201933'
+      ctx.fillRect(15, 20, 482, 472)
+      ctx.fillStyle = '#ffe253'
+      ctx.beginPath()
+      ctx.moveTo(254, 35)
+      ctx.lineTo(477, 141)
+      ctx.lineTo(447, 397)
+      ctx.lineTo(254, 477)
+      ctx.lineTo(64, 397)
+      ctx.lineTo(34, 141)
+      ctx.closePath()
+      ctx.fill()
+      ctx.fillStyle = '#201933'
+      ctx.font = '900 207px monospace'
       ctx.textAlign = 'center'
-      ctx.fillText('B–07', 256, 316)
+      ctx.fillText('07', 254, 338)
+      ctx.fillStyle = '#be255e'
+      ctx.fillRect(202, 129, 104, 34)
+      ctx.fillRect(209, 372, 90, 30)
     }),
-    0.71,
-    0.5,
-    0.91,
+    0.89,
+    0.72,
+    0.88,
     -0.362,
   )
 
   // Fixed landmarks keep nearby camera views visually distinct and overlapping.
-  part(0.56, 0.54, 0.8, orange, -1.7, 0.28, -1.1, scene)
-  part(0.68, 0.28, 0.51, cream, 1.67, 0.15, -0.7, scene)
-  part(0.57, 0.17, 0.36, dark, 1.15, 0.096, 1.27, scene)
-  const ring = new Mesh(
+  const box = patternedMaterial('#975545', '#f2cc99', 'K4', 59)
+  const book = patternedMaterial('#536698', '#f4dfa7', 'M8', 117)
+  const tray = patternedMaterial('#5d6544', '#dbbf79', 'P5', 242)
+  part(0.62, 0.68, 0.8, box, -1.92, 0.35, -1.42, scene).rotation.y = 0.27
+  part(0.84, 0.3, 0.61, book, 1.96, 0.16, -1.3, scene).rotation.y = -0.47
+  part(0.66, 0.18, 0.54, tray, 1.64, 0.1, 1.58, scene).rotation.y = 0.2
+  const tile = new Mesh(
     new BoxGeometry(0.68, 0.06, 0.7),
-    new MeshStandardMaterial({ color: '#639f92' }),
+    patternedMaterial('#678d8f', '#282c3e', 'L3', 72),
   )
-  ring.position.set(-1.4, 0.04, 1.35)
-  ring.rotation.y = 0.35
-  scene.add(ring)
-  return { scene, light: sun }
+  tile.position.set(-1.94, 0.04, 1.36)
+  tile.rotation.y = 0.35
+  scene.add(tile)
+  return { scene, light: sun, toy }
 }

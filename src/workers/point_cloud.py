@@ -67,6 +67,7 @@ def export_point_cloud(
     process_res: int = 504,
     max_points: int = 200_000,
     with_depth: bool = False,
+    calibrations: list[dict] | None = None,
 ) -> dict:
     """Export a complete batch into a new directory and return its manifest."""
     images = [path.resolve() for path in images]
@@ -75,6 +76,17 @@ def export_point_cloud(
     for path in images:
         if path.suffix.lower() not in {".jpg", ".jpeg", ".png"} or not path.is_file():
             raise ValueError(f"Expected a JPEG or PNG file: {path}")
+    camera_inputs = {}
+    if calibrations is not None:
+        import numpy as np
+
+        camera_inputs = {
+            name: np.asarray([calibration[name] for calibration in calibrations], dtype=np.float32)
+            for name in ("extrinsics", "intrinsics")
+        }
+        if (camera_inputs["extrinsics"].shape != (len(images), 4, 4)
+                or camera_inputs["intrinsics"].shape != (len(images), 3, 3)):
+            raise ValueError("Expected one valid camera calibration per image")
 
     output_dir = output_dir.resolve()
     if output_dir.exists():
@@ -93,6 +105,7 @@ def export_point_cloud(
             show_cameras=False,
             num_max_points=max_points,
             export_kwargs={"glb": {"export_depth_vis": False}},
+            **camera_inputs,
         )
         elapsed = perf_counter() - started
         glb = staging / "scene.glb"
@@ -124,6 +137,7 @@ def export_point_cloud(
                 "ref_view_strategy": "first",
                 "max_points": max_points,
                 "with_depth": with_depth,
+                "camera_calibration": "virtual-camera-v1" if camera_inputs else "estimated",
             },
             "result": {
                 "point_cloud": glb.name,
@@ -149,9 +163,11 @@ def main() -> int:
     parser.add_argument("--process-res", type=positive_integer, default=504, help="DA3 input size, default 504")
     parser.add_argument("--max-points", type=positive_integer, default=200_000, help="GLB point limit, default 200000")
     parser.add_argument("--with-depth", action="store_true", help="Include RGB/depth previews for each photo")
+    parser.add_argument("--camera-calibration", type=Path, help="JSON calibration in image order")
     args = parser.parse_args()
 
     try:
+        calibrations = json.loads(args.camera_calibration.read_text(encoding="utf-8")) if args.camera_calibration else None
         model = load_model(args.model_dir, args.device)
         export_point_cloud(
             model,
@@ -162,6 +178,7 @@ def main() -> int:
             process_res=args.process_res,
             max_points=args.max_points,
             with_depth=args.with_depth,
+            calibrations=calibrations,
         )
     except Exception as error:
         print(f"Point cloud export failed: {error}", file=sys.stderr)

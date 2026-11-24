@@ -30,17 +30,35 @@ class WorkflowTests(unittest.TestCase):
         scene = self.post_json("/api/scenes", {"title": title, "source": "sample"})
         return f"/api/scenes/{scene['scene_id']}"
 
-    def upload(self, capture_id, color, scene=None):
+    def upload(self, capture_id, color, scene=None, view_label="front"):
         image = BytesIO()
         Image.new("RGB", (4, 4), color).save(image, "PNG")
-        return self.upload_bytes(image.getvalue(), capture_id, scene)
+        return self.upload_bytes(image.getvalue(), capture_id, scene, view_label)
 
-    def upload_bytes(self, data, capture_id="camera", scene=None):
+    def upload_bytes(self, data, capture_id="camera", scene=None, view_label="front"):
         return self.client.post(
             (scene or self.scene) + "/frames",
-            data={"capture_id": capture_id, "view_label": "front"},
+            data={"capture_id": capture_id, "view_label": view_label},
             files={"image": ("toy.png", data, "image/png")},
         )
+
+    def test_simulation_revisions_are_isolated_by_layout(self):
+        front = self.upload("front", "blue", view_label="[sim-v1:0,0,0] front").json()
+        back = self.upload("back", "red", view_label="[sim-v1:0,0,0] back").json()
+        moved = self.upload("moved", "green", view_label="[sim-v1:35,-15,45] back").json()
+        manual = self.upload("manual", "orange").json()
+        path = self.scene + "/revisions"
+        for other in (moved, manual):
+            with self.subTest(other=other["view_label"]):
+                result = self.client.post(path, json={"frame_ids": [front["frame_id"], other["frame_id"]]})
+                self.assertEqual(result.status_code, 422)
+
+        original_ids = [front["frame_id"], back["frame_id"]]
+        original = self.post_json(path, {"frame_ids": original_ids})
+        latest = self.post_json(path, {"frame_ids": [moved["frame_id"]]})
+        self.assertNotEqual(latest["revision_id"], original["revision_id"])
+        self.assertEqual([r["frame_ids"] for r in self.client.get(path).json()],
+                         [[moved["frame_id"]], original_ids])
 
     def test_upload_size_limits_with_and_without_content_length(self):
         sized = self.upload_bytes(b"x" * (MAX_BYTES + 1))

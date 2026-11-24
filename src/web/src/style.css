@@ -473,6 +473,9 @@ h1 {
   height: 100%;
   border: 0;
 }
+.virtual-graphics canvas {
+  object-fit: contain;
+}
 .viewer-overlay {
   position: absolute;
   inset: 0;

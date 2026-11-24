@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..workers.registration import SPLAT_RECIPES
+from ..workers.simulation_camera import LAYOUT_PATTERN
 from . import store, worker_jobs
 from .images import MAX_REQUEST, photo_path, read_image, save_image
 from .models import Frame, Job, JobInput, Revision, RevisionInput, Scene, SceneDetail, SceneInput
@@ -172,10 +173,13 @@ def create_revision(scene_id: str, payload: RevisionInput, response: Response, s
             response.status_code = 200
             return store.revision_record(existing)
         placeholders = ",".join("?" for _ in ids)
-        count = db.execute(f"SELECT count(*) FROM frames WHERE scene_id = ? AND frame_id IN ({placeholders})",
-                           (scene_id, *ids)).fetchone()[0]
-        if count != len(ids):
+        rows = db.execute(f"SELECT view_label FROM frames WHERE scene_id = ? AND frame_id IN ({placeholders})",
+                          (scene_id, *ids)).fetchall()
+        if len(rows) != len(ids):
             raise HTTPException(422, "所选照片须全部来自当前场景")
+        layouts = {match[1] if (match := LAYOUT_PATTERN.match(label)) else None for (label,) in rows}
+        if len(layouts) > 1:
+            raise HTTPException(422, "同一批次只可包含同一仿真布局的照片，请按布局分别确认")
         version = db.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM revisions WHERE scene_id = ?",
                              (scene_id,)).fetchone()[0]
         revision_id = uuid4().hex

@@ -18,6 +18,7 @@ from src.api.main import create_app
 from src.api.settings import Settings
 from src.workers import reconstruct_gaussians as cli
 from src.workers import runner, splat_executor
+from src.workers.simulation_camera import frame_calibration
 
 
 PLY = b"""ply
@@ -88,6 +89,18 @@ class ReconstructionTests(unittest.TestCase):
                         self.assertEqual(failed.exception.unregistered_indices, list(range(count, 4)))
                         brush.assert_not_called()
         self.assertFalse((self.root / "failed").exists())
+
+    def test_virtual_camera_calibration_matches_capture_and_rejects_other_inputs(self):
+        frame = {"view_label": "[sim-v1:70,0,-175] rear @cam:180,21,425", "width": 960, "height": 720}
+        calibration = frame_calibration(frame)
+        self.assertEqual(calibration["target"], (0.7, 1.05, 0))
+        self.assertEqual([row[2] for row in calibration["intrinsics"]], [480, 360, 1])
+        for point, expected in ((calibration["center"], (0, 0, 0)), (calibration["target"], (0, 0, 4.25))):
+            for axis, value in zip(calibration["extrinsics"], expected, strict=False):
+                self.assertAlmostEqual(sum(a * b for a, b in zip(axis, (*point, 1), strict=True)), value)
+        self.assertIsNone(frame_calibration({**frame, "width": 600}))
+        self.assertIsNone(frame_calibration({**frame, "view_label": "[sim-v1:0,0,0] front"}))
+        self.assertIsNone(frame_calibration({**frame, "view_label": "[sim-v1:0,0,0] top @cam:180,95,425"}))
 
 
 class WorkbenchRegistrationTests(unittest.TestCase):

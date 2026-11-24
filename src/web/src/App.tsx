@@ -5,6 +5,8 @@ import { SceneForm, UploadForm } from './Forms'
 import { Gallery, JobsPanel, Viewport } from './Panels'
 import { ViewerStage } from './components/viewers/ViewerStage'
 import type { ViewerMode } from './components/viewers/ViewerStage'
+import { frameLayout, initialLayout, layoutKey } from './simulationLayout'
+import type { SimulationLayout } from './simulationLayout'
 
 function newestJobs(jobs: Job[]) {
   return [...jobs].sort(
@@ -25,6 +27,9 @@ function Studio({
   const [revisions, setRevisions] = useState<Revision[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [selected, setSelected] = useState<string[]>([])
+  const [layout, setLayout] = useState(initialLayout)
+  const [galleryLayout, setGalleryLayout] = useState('')
+  const galleryLayoutRef = useRef('')
   const [previewId, preview] = useState('')
   const [revisionId, choose] = useState('')
   const [viewerMode, setViewerMode] = useState<ViewerMode>('camera')
@@ -113,6 +118,34 @@ function Studio({
     preview(accepted[accepted.length - 1].frame_id)
     reload((v) => v + 1)
   }
+  function showLayout(key: string) {
+    if (galleryLayoutRef.current === key) return
+    galleryLayoutRef.current = key
+    setGalleryLayout(key)
+    setSelected([])
+  }
+  function moveExhibit(next: SimulationLayout) {
+    setLayout(next)
+    showLayout(layoutKey(next))
+  }
+  function virtualCaptured(accepted: Frame[]) {
+    const key = frameLayout(accepted[0].view_label) ?? ''
+    if (galleryLayoutRef.current === key) {
+      setSelected((old) => [...new Set([...old, ...accepted.map((f) => f.frame_id)])])
+      preview(accepted.at(-1)!.frame_id)
+    }
+    setFrames((old) => [...new Map([...old, ...accepted].map((f) => [f.frame_id, f])).values()])
+    setNotice(`本次仿真采集上传 ${accepted.length} 张照片。`)
+    reload((v) => v + 1)
+  }
+  function showFrame(id: string) {
+    preview(id)
+    setViewerMode('camera')
+  }
+  function selectRevision(id: string) {
+    choose(id)
+    preview(revisions.find((item) => item.revision_id === id)?.frame_ids[0] ?? '')
+  }
   async function freeze() {
     if (busy || !selected.length) return
     setBusy(true)
@@ -126,6 +159,7 @@ function Studio({
         ),
       )
       choose(item.revision_id)
+      preview(item.frame_ids[0])
       setSelected([])
       setTab('jobs')
       setNotice(
@@ -157,10 +191,21 @@ function Studio({
       setBusy(false)
     }
   }
-  const frame = frames.find((f) => f.frame_id === previewId)
   const activeRevision =
     revisions.find((revision) => revision.revision_id === revisionId) ??
     revisions[0]
+  const visibleFrameId = tab === 'jobs' && activeRevision && previewId && !activeRevision.frame_ids.includes(previewId)
+    ? activeRevision.frame_ids[0]
+    : previewId
+  const frame = frames.find((f) => f.frame_id === visibleFrameId)
+  const frameLayouts = new Map(frames.map((f) => [f.frame_id, frameLayout(f.view_label) ?? '']))
+  const layoutChoices = [...new Set(['', ...frameLayouts.values(), galleryLayout])]
+  const galleryFrames = frames.filter((f) => frameLayouts.get(f.frame_id) === galleryLayout)
+  const revisionLayouts = new Map<string, string>()
+  for (const revision of revisions) {
+    const key = frameLayouts.get(revision.frame_ids[0])
+    if (key) revisionLayouts.set(revision.revision_id, key)
+  }
   return (
     <>
       <div className="workspace-heading">
@@ -225,13 +270,19 @@ function Studio({
           sceneId={scene.scene_id}
           revision={activeRevision}
           revisions={revisions}
+          revisionLayouts={revisionLayouts}
           jobs={jobs}
           frame={frame}
           view={view}
           mode={viewerMode}
-          onMode={setViewerMode}
-          onRevision={choose}
-          onCaptured={(captured) => uploaded([captured])}
+          onMode={(mode) => {
+            if (mode === 'virtual') showLayout(layoutKey(layout))
+            setViewerMode(mode)
+          }}
+          onRevision={selectRevision}
+          layout={layout}
+          onLayout={moveExhibit}
+          onCaptured={virtualCaptured}
           resetFrame={() => preview('')}
         />
         {tab === 'capture' ? (
@@ -240,19 +291,22 @@ function Studio({
               sceneId={scene.scene_id}
               view={view}
               setView={setView}
-              onFrames={uploaded}
+              onFrames={(accepted) => {
+                showLayout('')
+                uploaded(accepted)
+              }}
             />
             <Gallery
-              frames={frames}
+              frames={galleryFrames}
+              layouts={layoutChoices}
+              layout={galleryLayout}
+              showLayout={showLayout}
               selected={selected}
               previewId={previewId}
-              preview={(id) => {
-                preview(id)
-                setViewerMode('camera')
-              }}
+              preview={showFrame}
               busy={busy || loading}
               clear={() => setSelected([])}
-              selectAll={() => setSelected(frames.map((f) => f.frame_id))}
+              selectAll={() => setSelected(galleryFrames.map((f) => f.frame_id))}
               toggle={(id) =>
                 setSelected((old) =>
                   old.includes(id) ? old.filter((f) => f !== id) : [...old, id],
@@ -266,9 +320,11 @@ function Studio({
             <JobsPanel
               frames={frames}
               revisions={revisions}
+              revisionLayouts={revisionLayouts}
               jobs={jobs}
               revisionId={activeRevision?.revision_id ?? ''}
-              choose={choose}
+              choose={selectRevision}
+              preview={showFrame}
               enqueue={enqueue}
               busy={busy || loading}
             />
