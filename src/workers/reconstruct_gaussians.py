@@ -18,6 +18,10 @@ from time import perf_counter
 class RegistrationError(ValueError):
     """COLMAP did not yield a component usable by Brush."""
 
+    def __init__(self, message: str, unregistered_indices: list[int]):
+        super().__init__(message)
+        self.unregistered_indices = unregistered_indices
+
 
 def positive_integer(value: str) -> int:
     number = int(value)
@@ -89,17 +93,21 @@ def register_images(staging: Path, frames: list[dict]) -> dict:
         pycolmap.match_exhaustive(database, device=pycolmap.Device.cpu)
         models = pycolmap.incremental_mapping(database, images, mapper_directory)
         if not models:
-            raise RegistrationError("COLMAP registered no model. Check image overlap, sharpness and view translation.")
+            raise RegistrationError(
+                "COLMAP registered no model. Check image overlap, sharpness and view translation.",
+                list(range(len(frames))),
+            )
         largest = max(models.values(), key=lambda model: (model.num_reg_images(), model.num_points3D()))
+        registered = {largest.image(image_id).name for image_id in largest.reg_image_ids()}
         if largest.num_reg_images() < 3 or largest.num_points3D() == 0:
             raise RegistrationError(
                 f"Largest COLMAP model has {largest.num_reg_images()} registered photos "
-                f"and {largest.num_points3D()} sparse points. Add intermediate views and retry."
+                f"and {largest.num_points3D()} sparse points. Add intermediate views and retry.",
+                [index for index, frame in enumerate(frames) if Path(frame["prepared"]).name not in registered],
             )
         model_dir = staging / "sparse" / "0"
         model_dir.mkdir(parents=True)
         largest.write(model_dir)
-        registered = {largest.image(image_id).name for image_id in largest.reg_image_ids()}
         point_count = largest.num_points3D()
         model_count = len(models)
 
@@ -254,6 +262,7 @@ def main() -> int:
         manifest = reconstruct(args)
     except RegistrationError as error:
         print(f"INSUFFICIENT_REGISTRATION: {error}", file=sys.stderr)
+        print(f"UNREGISTERED_INPUT_INDICES: {json.dumps(error.unregistered_indices)}", file=sys.stderr)
         return 1
     except Exception as error:
         print(f"3DGS reconstruction failed: {error}", file=sys.stderr)

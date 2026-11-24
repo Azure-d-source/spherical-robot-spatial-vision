@@ -4,6 +4,12 @@ import type { Frame, Job, Kind, Revision, Scene } from './api'
 import { SceneForm, UploadForm } from './Forms'
 import { Gallery, JobsPanel, Viewport } from './Panels'
 
+function newestJobs(jobs: Job[]) {
+  return [...jobs].sort(
+    (a, b) => b.created_at.localeCompare(a.created_at) || b.job_id.localeCompare(a.job_id),
+  )
+}
+
 function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number }) {
   const [frames, setFrames] = useState<Frame[]>([])
   const [revisions, setRevisions] = useState<Revision[]>([])
@@ -35,7 +41,7 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
         if (version !== seq.current || controller.signal.aborted) return
         setFrames(fs)
         setRevisions(rs.sort((a, b) => b.version - a.version))
-        setJobs(js.sort((a, b) => b.created_at.localeCompare(a.created_at)))
+        setJobs(newestJobs(js))
         setSelected((old) => old.filter((key) => fs.some((f) => f.frame_id === key)))
       })
       .catch((err) => {
@@ -64,7 +70,7 @@ function Studio({ scene, revisionTick }: { scene: Scene; revisionTick: number })
       request = controller
       try {
         const next = await api.jobs(scene.scene_id, controller.signal)
-        if (!controller.signal.aborted) setJobs(next)
+        if (!controller.signal.aborted) setJobs(newestJobs(next))
       } catch {
         // Retry transient errors without discarding the last known results.
       } finally {

@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import sys
+from http.client import HTTPException as HTTPProtocolError
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic
@@ -16,6 +17,7 @@ from .registration import ExecutionError
 from .splat_executor import execute, execute_points
 
 log = logging.getLogger(__name__)
+REQUEST_ERRORS = (OSError, HTTPProtocolError, ValueError)
 
 
 def post(base_url, path, payload):
@@ -25,7 +27,12 @@ def post(base_url, path, payload):
         headers["X-Worker-Token"] = token
     request = Request(base_url + "/api/internal/" + path, json.dumps(payload).encode(), headers)
     with urlopen(request, timeout=15) as response:
-        return json.load(response) if response.status != 204 else None
+        if response.status == 204:
+            return None
+        result = json.load(response)
+        if not isinstance(result, dict):
+            raise ValueError("Unexpected Worker API response")
+        return result
 
 
 def renew(url, path, lease, seconds, done, lost):
@@ -37,7 +44,7 @@ def renew(url, path, lease, seconds, done, lost):
         started = monotonic()
         try:
             post(url, path + "/heartbeat", lease)
-        except OSError as error:
+        except REQUEST_ERRORS as error:
             if isinstance(error, HTTPError) and error.code in {401, 404, 409}:
                 break
             interval = 1
@@ -46,6 +53,17 @@ def renew(url, path, lease, seconds, done, lost):
             interval = seconds / 3
     if not done.is_set():
         lost.set()
+
+
+def report_terminal(url, path, payload, stopping):
+    for attempt in range(3):
+        try:
+            return True, post(url, path, payload)
+        except REQUEST_ERRORS as error:
+            permanent = isinstance(error, HTTPError) and error.code < 500 and error.code not in {408, 429}
+            if permanent or attempt == 2 or stopping.wait(1):
+                log.warning("Could not report %s: %s", path, error)
+                return False, None
 
 
 def run_job(args, job, stopping):
@@ -68,12 +86,20 @@ def run_job(args, job, stopping):
         except (ExecutionError, OSError) as error:
             log.error("%s job %s failed: %s", job["kind"], job["job_id"], error)
             if not cancelled():
-                code = error.code if isinstance(error, ExecutionError) else "EXECUTOR_ERROR"
-                post(args.api_url, path + "/fail", {**lease, "error_code": code})
+                payload = {**lease, "error_code": "EXECUTOR_ERROR"}
+                if isinstance(error, ExecutionError):
+                    payload.update(error_code=error.code, error_message=str(error))
+                    if error.coverage is not None:
+                        payload["coverage"] = error.coverage
+                reported, _ = report_terminal(args.api_url, path + "/fail", payload, stopping)
+                return reported
         else:
             if finished and not cancelled():
-                result = post(args.api_url, path + "/complete", lease)
-                log.info("%s job %s: %s", job["kind"], job["job_id"], result["status"])
+                reported, result = report_terminal(args.api_url, path + "/complete", lease, stopping)
+                if reported and result is not None:
+                    log.info("%s job %s: %s", job["kind"], job["job_id"], result.get("status"))
+                return reported
+        return True
     finally:
         done.set()
         pulse.join()
@@ -110,9 +136,9 @@ def main():
     while not stopping.is_set():
         try:
             job = post(args.api_url, "workers/claim", {"kinds": kinds})
-            if job:
-                run_job(args, job, stopping)
-        except (OSError, ValueError) as error:
+            if job and not run_job(args, job, stopping) and args.once:
+                return 1
+        except REQUEST_ERRORS as error:
             log.error("Worker request failed: %s", error)
             if args.once or isinstance(error, HTTPError) and error.code == 401:
                 return 1

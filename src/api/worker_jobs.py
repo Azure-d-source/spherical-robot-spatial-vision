@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from ..workers.point_cloud import count_points
 from ..workers.registration import ExecutionError, SPLAT_RECIPES, registration_coverage, verify_recipe
 from .images import photo_path
-from .models import Job, JobKind
+from .models import Job, JobKind, RegistrationCoverage
 from .store import Storage, job_record
 
 router = APIRouter()
@@ -48,6 +48,8 @@ class LeaseInput(BaseModel):
 
 class FailureInput(LeaseInput):
     error_code: str = Field(pattern=r"^[A-Z_]+$", max_length=64)
+    error_message: str | None = Field(default=None, max_length=500, min_length=1)
+    coverage: RegistrationCoverage | None = None
 
 
 class ClaimInput(BaseModel):
@@ -139,16 +141,27 @@ def fail_job(db, job_id, code, message, coverage=None):
     result = json.dumps({"registration": coverage}) if coverage is not None else None
     db.execute("""
         UPDATE jobs SET status = 'failed', error_code = ?, error_message = ?, result_json = ?,
-            lease_until = NULL, lease_token_hash = NULL WHERE job_id = ?
+            lease_until = NULL WHERE job_id = ?
     """, (code, message, result, job_id))
 
 
 @router.post("/api/internal/jobs/{job_id}/fail", status_code=204, dependencies=[Depends(worker_access)])
 def fail_execution(job_id: str, payload: FailureInput, storage: Storage):
     with storage.connection(write=True) as db:
-        check_lease(load_job(db, job_id), payload.lease_token)
+        row = load_job(db, job_id)
+        if row["status"] == "failed" and same_token(row, payload.lease_token):
+            return
+        check_lease(row, payload.lease_token)
         code = payload.error_code if payload.error_code in ERRORS else "EXECUTOR_ERROR"
-        fail_job(db, job_id, code, ERRORS[code])
+        coverage = payload.coverage
+        if coverage is not None:
+            ids = [frame["frame_id"] for frame in batch_frames(db, row["revision_id"])]
+            missing = set(coverage.unregistered_frame_ids)
+            if (row["kind"] != "splat" or coverage.total_images != len(ids)
+                    or coverage.registered_images != len(ids) - len(missing)
+                    or len(missing) != len(coverage.unregistered_frame_ids) or not missing.issubset(ids)):
+                raise HTTPException(422, "失败报告的配准统计与输入批次不匹配")
+        fail_job(db, job_id, code, payload.error_message or ERRORS[code], coverage.model_dump() if coverage else None)
 
 
 def read_manifest(output):
@@ -243,7 +256,7 @@ def prepare_result(output, snapshot, frames, row):
 def complete(job_id: str, payload: LeaseInput, storage: Storage):
     with storage.connection() as db:
         row = load_job(db, job_id)
-        if row["status"] == "succeeded" and same_token(row, payload.lease_token):
+        if row["status"] in {"succeeded", "failed"} and same_token(row, payload.lease_token):
             return job_record(row)
         check_lease(row, payload.lease_token)
         frames = batch_frames(db, row["revision_id"])
@@ -258,7 +271,10 @@ def complete(job_id: str, payload: LeaseInput, storage: Storage):
             result = prepare_result(output, snapshot, frames, row)
         except ExecutionError as error:
             with storage.connection(write=True) as db:
-                check_lease(load_job(db, job_id), payload.lease_token)
+                latest = load_job(db, job_id)
+                if latest["status"] in {"succeeded", "failed"} and same_token(latest, payload.lease_token):
+                    return job_record(latest)
+                check_lease(latest, payload.lease_token)
                 fail_job(db, job_id, error.code, str(error), error.coverage)
                 return job_record(load_job(db, job_id))
 
@@ -266,7 +282,7 @@ def complete(job_id: str, payload: LeaseInput, storage: Storage):
         try:
             with storage.connection(write=True) as db:
                 latest = load_job(db, job_id)
-                if latest["status"] == "succeeded" and same_token(latest, payload.lease_token):
+                if latest["status"] in {"succeeded", "failed"} and same_token(latest, payload.lease_token):
                     return job_record(latest)
                 check_lease(latest, payload.lease_token)
                 snapshot.rename(destination)

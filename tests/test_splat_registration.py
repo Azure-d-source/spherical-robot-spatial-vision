@@ -3,6 +3,7 @@ import struct
 import sys
 import unittest
 from argparse import Namespace
+from http.client import IncompleteRead
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -82,8 +83,9 @@ class ReconstructionTests(unittest.TestCase):
             with self.subTest(count=count, points=points, has_component=has_component):
                 with patch.dict(sys.modules, {"pycolmap": self.colmap(count, points, has_component)}):
                     with patch.object(cli, "run_tool") as brush:
-                        with self.assertRaises(cli.RegistrationError):
+                        with self.assertRaises(cli.RegistrationError) as failed:
                             cli.reconstruct(self.options("failed"))
+                        self.assertEqual(failed.exception.unregistered_indices, list(range(count, 4)))
                         brush.assert_not_called()
         self.assertFalse((self.root / "failed").exists())
 
@@ -136,8 +138,7 @@ class WorkbenchRegistrationTests(unittest.TestCase):
         path = f"/api/internal/jobs/{job_id}/complete"
         lease = {"lease_token": claim["lease_token"]}
         result = self.post(path, lease, headers=self.headers)
-        if result["status"] == "succeeded":
-            self.assertEqual(self.post(path, lease, headers=self.headers), result)
+        self.assertEqual(self.post(path, lease, headers=self.headers), result)
         self.assertNotIn("lease_token", result)
         return result
 
@@ -166,26 +167,40 @@ class WorkbenchRegistrationTests(unittest.TestCase):
                     self.assertEqual(self.client.get(path).status_code, 200)
 
     def test_runner_maps_cli_registration_failure(self):
-        job_id, _frames = self.create_job(3, "v1")
+        job_id, frames = self.create_job(3, "v1")
         claim = self.post("/api/internal/workers/claim", {}, headers=self.headers)
         failed_cli = self.root / "failed_cli.py"
         failed_cli.write_text(
             "import sys\nfrom pathlib import Path\n"
             "assert not Path(sys.argv[2]).exists()\n"
             "print('INSUFFICIENT_REGISTRATION: test', file=sys.stderr)\n"
+            "print('UNREGISTERED_INPUT_INDICES: [1, 2]', file=sys.stderr)\n"
             "sys.exit(1)\n", encoding="utf-8",
         )
         args = Namespace(api_url="unused", data_dir=self.root, python=sys.executable,
                          brush="unused", splat_transform=None)
+        reports = []
+
+        def post_without_first_response(_url, path, payload):
+            self.post("/api/internal/" + path, payload, headers=self.headers)
+            reports.append(payload)
+            if len(reports) == 1:
+                raise IncompleteRead(b"")
+            return None
+
         with patch.object(splat_executor, "SCRIPT", failed_cli):
-            with patch.object(runner, "post", side_effect=lambda _url, path, payload: self.post(
-                "/api/internal/" + path, payload, headers=self.headers
-            )):
-                runner.run_job(args, claim, Event())
+            with patch.object(runner, "post", side_effect=post_without_first_response):
+                self.assertTrue(runner.run_job(args, claim, Event()))
         result = self.client.get(f"/api/jobs/{job_id}").json()
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["error_code"], "INSUFFICIENT_REGISTRATION")
+        self.assertEqual(result["error_message"], reports[0]["error_message"])
+        self.assertIn("请补拍", result["error_message"])
+        self.assertEqual(result["registration"], {
+            "registered_images": 1, "total_images": 3, "unregistered_frame_ids": frames[1:],
+        })
         self.assertEqual(result["artifacts"], [])
+        self.assertEqual(reports, [reports[0], reports[0]])
 
     def test_fusion_uses_da3_interpreter_and_publishes_frame_previews(self):
         self.create_job(3, "v1")
@@ -213,13 +228,20 @@ class WorkbenchRegistrationTests(unittest.TestCase):
         )
         args = Namespace(api_url="unused", data_dir=self.root, python="unavailable-gs-interpreter",
                          da3_python=sys.executable, da3_model="unused")
+        reports = []
+
+        def post_with_connection_reset(_url, path, payload):
+            reports.append(payload)
+            if len(reports) == 1:
+                raise ConnectionResetError("test reconnection")
+            return self.post("/api/internal/" + path, payload, headers=self.headers)
+
         with patch.object(splat_executor, "POINT_SCRIPT", fake_da3):
-            with patch.object(runner, "post", side_effect=lambda _url, path, payload: self.post(
-                "/api/internal/" + path, payload, headers=self.headers
-            )):
-                runner.run_job(args, claim, Event())
+            with patch.object(runner, "post", side_effect=post_with_connection_reset):
+                self.assertTrue(runner.run_job(args, claim, Event()))
         result = self.client.get(f"/api/jobs/{job_id}").json()
         self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(reports, [reports[0], reports[0]])
         preview_ids = [a["frame_id"] for a in result["artifacts"] if a["filename"].endswith(".jpg")]
         self.assertEqual(preview_ids, frames)
         for artifact in result["artifacts"]:

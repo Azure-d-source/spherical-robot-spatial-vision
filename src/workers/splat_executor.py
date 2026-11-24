@@ -1,4 +1,6 @@
 import hashlib
+import json
+import logging
 from pathlib import Path
 from subprocess import TimeoutExpired
 
@@ -9,6 +11,28 @@ from .registration import ExecutionError, SPLAT_RECIPES
 
 SCRIPT = Path(__file__).with_name("reconstruct_gaussians.py")
 POINT_SCRIPT = Path(__file__).with_name("point_cloud.py")
+log = logging.getLogger(__name__)
+
+
+def failure_coverage(lines, frames):
+    prefix = "UNREGISTERED_INPUT_INDICES: "
+    for line in reversed(lines):
+        if not line.startswith(prefix):
+            continue
+        try:
+            missing = json.loads(line.removeprefix(prefix))
+        except ValueError:
+            return None
+        if (isinstance(missing, list)
+                and all(type(index) is int and 0 <= index < len(frames) for index in missing)
+                and missing == sorted(set(missing))):
+            return {
+                "registered_images": len(frames) - len(missing),
+                "total_images": len(frames),
+                "unregistered_frame_ids": [frames[index]["frame_id"] for index in missing],
+            }
+        return None
+    return None
 
 
 def prepare_inputs(frames, photos, attempt_dir):
@@ -76,14 +100,17 @@ def execute_cli(job, data_dir, command, cancelled):
                     continue
 
     if process.returncode:
-        with stderr_path.open("rb") as log:
-            log.seek(max(0, stderr_path.stat().st_size - 4096))
-            detail = log.read().decode("utf-8", errors="replace")
-        if any(line.startswith("INSUFFICIENT_REGISTRATION:") for line in detail.splitlines()):
-            code = "INSUFFICIENT_REGISTRATION"
-        elif "Shared calibration requires one image size and orientation after resizing:" in detail:
-            code = "RESOLUTION_MISMATCH"
-        else:
-            code = "EXECUTOR_ERROR"
-        raise ExecutionError(code, str(stderr_path))
+        with stderr_path.open("rb") as stream:
+            stream.seek(max(0, stderr_path.stat().st_size - 4096))
+            detail = stream.read().decode("utf-8", errors="replace")
+        log.error("CLI exit code %s. See %s", process.returncode, stderr_path)
+        lines = detail.splitlines()
+        if any(line.startswith("INSUFFICIENT_REGISTRATION:") for line in lines):
+            coverage = failure_coverage(lines, job["frames"])
+            raise ExecutionError(
+                "INSUFFICIENT_REGISTRATION", "配准不足，请补拍清晰、有重叠和位移的机位。", coverage
+            )
+        if "Shared calibration requires one image size and orientation after resizing:" in detail:
+            raise ExecutionError("RESOLUTION_MISMATCH", "校正方向后照片画幅不一致。请统一拍摄方向与画幅。")
+        raise ExecutionError("EXECUTOR_ERROR", "作业执行失败，请查看 Worker 日志。")
     return not cancelled()
