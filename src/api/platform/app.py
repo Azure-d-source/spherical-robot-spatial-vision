@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..web import WorkbenchFiles
 from . import accounts, frames, jobs, revisions, scenes, workers
 from .config import PlatformSettings
 from .database import Database
@@ -80,7 +81,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
     @app.get("/api/health", tags=["系统"])
     def health(db: Database):
         db.execute(text("SELECT 1"))
-        return {"status": "ok"}
+        return {"status": "ok", "workbench": "team"}
 
     app.include_router(accounts.router)
     app.include_router(scenes.router)
@@ -88,4 +89,5 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
     app.include_router(revisions.router)
     app.include_router(jobs.router)
     app.include_router(workers.router)
+    app.mount("/", WorkbenchFiles(settings.web_dist.resolve()), name="workbench")
     return app

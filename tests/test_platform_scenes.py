@@ -2,6 +2,7 @@ import json
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -136,7 +137,21 @@ class PlatformApiTests(unittest.TestCase):
                                    headers={"Origin": "https://another.example.test"})
             self.assertEqual((response.status_code, response.json()["code"]), (403, "ORIGIN_FORBIDDEN"))
             self.assertEqual(client.get("/api/scenes").json(), [])
-            self.assertEqual(client.get("/api/health").json(), {"status": "ok"})
+            self.assertEqual(client.get("/api/health").json(), {"status": "ok", "workbench": "team"})
+
+    def test_workbench_and_wasm_load_before_login_but_scenes_require_a_session(self):
+        dist = Path(self.enterContext(TemporaryDirectory()))
+        (dist / "index.html").write_text("<h1>Workbench</h1>", encoding="utf-8")
+        wasm = dist / "supersplat" / "zstd-decoder.wasm"
+        wasm.parent.mkdir()
+        wasm.write_bytes(b"\x00asm\x01\x00\x00\x00")
+        with TestClient(create_app(replace(self.settings, web_dist=dist)), base_url=ORIGIN) as client:
+            self.assertIn("<h1>Workbench</h1>", client.get("/").text)
+            decoder = client.get("/supersplat/zstd-decoder.wasm", headers={"Range": "bytes=0-3"})
+            self.assertEqual((decoder.status_code, decoder.headers["content-type"], decoder.content),
+                             (206, "application/wasm", b"\x00asm"))
+            self.assertEqual(client.get("/api/scenes").json()["code"], "LOGIN_REQUIRED")
+            self.assertIn("/api/auth/login", client.get("/openapi.json").json()["paths"])
 
     def photo(self, color="blue"):
         output = BytesIO()

@@ -10,7 +10,6 @@ from uuid import uuid4
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from ..workers.registration import SPLAT_RECIPES
 from ..workers.simulation_camera import LAYOUT_PATTERN
@@ -19,6 +18,7 @@ from .images import MAX_REQUEST, photo_path, read_image, save_image
 from .models import Frame, Job, JobInput, Revision, RevisionInput, Scene, SceneDetail, SceneInput
 from .settings import DEFAULT_WEB_DIST, Settings
 from .store import Storage
+from .web import WorkbenchFiles
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -230,23 +230,6 @@ def get_job(job_id: str, storage: Storage):
     if row is None:
         raise HTTPException(404, "未找到该作业")
     return store.job_record(row)
-
-
-class WorkbenchFiles(StaticFiles):
-    def __init__(self, directory: Path):
-        super().__init__(directory=directory, html=True, check_dir=False)
-        self.index = directory / "index.html"
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and not await run_in_threadpool(self.index.is_file):
-            raise HTTPException(404, "工作台尚未构建")
-        await super().__call__(scope, receive, send)
-
-    async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
-        if Path(path).suffix.lower() == ".wasm" and response.status_code in {200, 206}:
-            response.headers["content-type"] = "application/wasm"
-        return response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

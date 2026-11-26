@@ -1,4 +1,4 @@
-# 后端第一段联调
+# 团队工作台与 PostgreSQL 后端
 
 此入口用于联调 PostgreSQL、账号会话、团队场景、照片采集、冻结批次与重建作业。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
 
@@ -13,10 +13,21 @@ $env:SPATIAL_DATABASE_URL = 'postgresql+psycopg://user:password@127.0.0.1:5432/o
 .\.venv\Scripts\python.exe -m src.api.platform.manage create-team orbitforge
 .\.venv\Scripts\python.exe -m src.api.platform.manage create-account orbitforge owner@example.test --role admin
 .\.venv\Scripts\python.exe -m src.api.platform.manage create-account orbitforge member@example.test
+npm --prefix src/web ci
+npm --prefix src/web run build
 .\.venv\Scripts\python.exe -m uvicorn src.api.platform.app:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
-打开 [接口文档](http://127.0.0.1:8001/docs)，先登录，再创建和查看场景。账号密码通过终端提示输入。异地内测时，将 `SPATIAL_PUBLIC_ORIGIN` 设为工作台的 HTTPS 源地址，例如 `https://workbench.example.com`。HTTPS 模式会为会话 Cookie 启用 Secure，反向代理应保留该站点的 Host。原有采集、批次和 GPU 演示可继续通过 [工作台原入口](../../README.md#本地启动工作台) 验证。
+打开 [团队工作台](http://127.0.0.1:8001/) 后用预先创建的账号登录。创建账号时在终端输入密码。答辩可提前准备一个演示账号，团队内测为每位成员创建独立账号。同队场景可见，场景创建者和团队管理员可改名、归档或恢复。可按「全部」「进行中」「已归档」筛选。接口契约见 [OpenAPI 文档](http://127.0.0.1:8001/docs)。
+
+异地内测时，将 `SPATIAL_PUBLIC_ORIGIN` 设为工作台的 HTTPS 源地址，例如 `https://workbench.example.com`。将页面、API 和静态查看器都转发给同一后端，并保留原始 Host。HTTPS 模式会为会话 Cookie 启用 Secure。
+
+使用 Vite 联调前端时，启动 API 的终端需先执行 `$env:SPATIAL_PUBLIC_ORIGIN = 'http://127.0.0.1:5173'`。另开终端运行以下命令，并在浏览器使用配置中的同一个地址。
+
+```powershell
+$env:SPATIAL_API_URL = 'http://127.0.0.1:8001'
+npm --prefix src/web run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
 
 PostgreSQL 入口默认把原图写入 `data/platform-runtime/photos`。可以用 `SPATIAL_DATA_DIR` 指定独立的运行目录。每个数据库使用自己的目录，同一数据库的 API 和 Worker 使用同一目录。
 
@@ -32,6 +43,7 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 
 | 接口 | 当前契约 |
 | --- | --- |
+| `GET /api/health` | 检查数据库连接并返回 `status: "ok"` 与 `workbench: "team"`，供页面启动时确认登录模式。 |
 | `POST /api/auth/login` | 接收 `email`、`password`，返回身份和团队，设置会话 Cookie。 |
 | `GET /api/auth/me` | 返回已登录账号、团队和角色。 |
 | `POST /api/auth/logout` | 注销当前会话，返回 `204`。 |
@@ -75,6 +87,8 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 | 同批次 3DGS 重跑 | 49.17 秒 | 32/32 注册，发布新 PLY 和 SOG，默认结果切到本次运行。 |
 
 确认了重跑排队时仍可读取初次成功结果，重跑发布成功后默认切换到第 2 次运行。重新启动 API 后，两轮 3DGS 与点云产物仍可读取。回归测试另覆盖失败重跑、旧运行晚完成、同编号重试、租约过期和跨团队的下载限制。
+
+同日用 Edge 验证了团队工作台。用创建者账号登录、刷新保持登录、改名和归档，再切换到普通成员查看原图、配准覆盖和产物历史。归档批次的真实 GLB 和最新成功 SOG 均能在内嵌查看器打开。会话失效后页面回到登录界面，创建者重新登录并恢复场景后，可以继续采集。
 
 安装测试依赖并设置 `SPATIAL_TEST_DATABASE_URL`。测试连接账号需要能在测试数据库创建临时 schema。
 

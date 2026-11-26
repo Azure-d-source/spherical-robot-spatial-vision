@@ -27,6 +27,7 @@ type Props = {
   view: string
   mode: ViewerMode
   className?: string
+  readOnly: boolean
   onMode: (mode: ViewerMode) => void
   onRevision: (id: string) => void
   layout: SimulationLayout
@@ -39,17 +40,13 @@ function findViewableResults(jobs: Job[], revision: Revision | undefined) {
   const available = jobs.filter(
     (job) =>
       job.revision_id === revision?.revision_id && job.status === 'succeeded',
-  )
+  ).sort((a, b) => (b.run_number ?? 0) - (a.run_number ?? 0))
   const point = available.find((job) =>
     job.artifacts?.some((file) => file.filename === 'scene.glb'),
   )
-  const splat =
-    available.find((job) =>
-      job.artifacts?.some((file) => file.filename === 'scene.sog'),
-    ) ??
-    available.find((job) =>
-      job.artifacts?.some((file) => file.filename === 'scene.ply'),
-    )
+  const splat = available.find((job) =>
+    job.artifacts?.some((file) => file.filename === 'scene.sog' || file.filename === 'scene.ply'),
+  )
   return {
     points: point?.artifacts?.find((file) => file.filename === 'scene.glb')
       ?.url,
@@ -72,6 +69,7 @@ export function ViewerStage({
   view,
   mode,
   className,
+  readOnly,
   onMode,
   onRevision,
   layout,
@@ -81,6 +79,7 @@ export function ViewerStage({
 }: Props) {
   const id = useId()
   const assets = findViewableResults(jobs, revision)
+  const visibleTabs = readOnly ? tabs.filter((tab) => tab.id !== 'virtual') : tabs
 
   function moveTab(
     event: KeyboardEvent<HTMLButtonElement>,
@@ -88,15 +87,15 @@ export function ViewerStage({
   ) {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
-    const index = tabs.findIndex((tab) => tab.id === current)
+    const index = visibleTabs.findIndex((tab) => tab.id === current)
     const next =
       event.key === 'Home'
-        ? tabs[0]
+        ? visibleTabs[0]
         : event.key === 'End'
-          ? tabs[tabs.length - 1]
-          : tabs[
-              (index + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) %
-                tabs.length
+          ? visibleTabs[visibleTabs.length - 1]
+          : visibleTabs[
+              (index + (event.key === 'ArrowLeft' ? -1 : 1) + visibleTabs.length) %
+                visibleTabs.length
             ]
     onMode(next.id)
     document.getElementById(id + '-' + next.id)?.focus()
@@ -109,7 +108,7 @@ export function ViewerStage({
     >
       <div className="viewer-heading">
         <div className="viewer-tabs" role="tablist" aria-label="查看方式">
-          {tabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.id}
               id={id + '-' + tab.id}
@@ -158,7 +157,7 @@ export function ViewerStage({
               <PointCloudViewer key={assets.points} url={assets.points} />
             ) : (
               <p className="viewer-empty">
-                当前批次暂无点云。提交深度或点云融合任务后，结果会显示在这里。
+                {readOnly ? '当前批次暂无点云。' : '当前批次暂无点云。提交深度或点云融合任务后，结果会显示在这里。'}
               </p>
             ))}
           {mode === 'splat' &&
@@ -169,10 +168,10 @@ export function ViewerStage({
               />
             ) : (
               <p className="viewer-empty">
-                当前批次暂无 3DGS。提交实景重建任务后，结果会显示在这里。
+                {readOnly ? '当前批次暂无 3DGS。' : '当前批次暂无 3DGS。提交实景重建任务后，结果会显示在这里。'}
               </p>
             ))}
-          {mode === 'virtual' && (
+          {mode === 'virtual' && !readOnly && (
             <VirtualCameraCanvas sceneId={sceneId} layout={layout} onLayout={onLayout} onCaptured={onCaptured} />
           )}
         </Suspense>

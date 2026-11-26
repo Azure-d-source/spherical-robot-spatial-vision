@@ -1,11 +1,20 @@
 export type Source = 'sample' | 'robot' | 'simulation'
 export type Kind = 'depth' | 'fusion' | 'splat'
+export type SceneStatus = 'active' | 'archived'
+export interface Account {
+  account_id: string
+  email: string
+  team_id: string
+  role: 'admin' | 'member'
+}
 export interface Scene {
   scene_id: string
   title: string
   target?: string | null
   source: Source
   created_at: string
+  owner_id?: string
+  status?: SceneStatus
 }
 export interface Frame {
   frame_id: string
@@ -27,6 +36,7 @@ export interface Job {
   status: string
   created_at: string
   recipe_version: string
+  run_number?: number
   error_code?: string | null
   error_message?: string | null
   registration?: {
@@ -48,7 +58,17 @@ export const kinds: Record<Kind, string> = {
 }
 export const views = ['正面', '左侧', '背面', '右侧', '顶部', '其他']
 
+export const sessionExpired = 'workbench:session-expired'
+let sessionVersion = 0
+
+export class ApiError extends Error {
+  constructor(public readonly code: string | undefined, message: string) {
+    super(message)
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const version = sessionVersion
   let response: Response
   try {
     response = await fetch('/api' + path, options)
@@ -59,9 +79,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     const detail = body?.detail
-    const hint = Array.isArray(detail) ? detail.map((item) => item.msg).join('，') : detail
-    throw new Error(typeof hint === 'string' ? hint : `请求失败（HTTP ${response.status}）`)
+    const hint = body?.message ?? (Array.isArray(detail) ? detail.map((item) => item.msg).join('，') : detail)
+    const code = typeof body?.code === 'string' ? body.code : undefined
+    if (response.status === 401 && code === 'LOGIN_REQUIRED' && path !== '/auth/me'
+        && !options?.signal?.aborted && version === sessionVersion) {
+      window.dispatchEvent(new Event(sessionExpired))
+    }
+    throw new ApiError(code, typeof hint === 'string' ? hint : `请求失败（HTTP ${response.status}）`)
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
@@ -75,10 +101,24 @@ function json(body: unknown): RequestInit {
 const scenePath = (id: string) => '/scenes/' + encodeURIComponent(id)
 
 export const api = {
-  health: (signal?: AbortSignal) => request<{ status: string }>('/health', { signal }),
+  health: (signal?: AbortSignal) => request<{ status: string; workbench?: 'team' }>('/health', { signal }),
+  me: (signal?: AbortSignal) => request<Account>('/auth/me', { signal }),
+  async login(email: string, password: string) {
+    const account = await request<Account>('/auth/login', json({ email, password }))
+    sessionVersion++
+    return account
+  },
+  async logout() {
+    await request<void>('/auth/logout', { method: 'POST' })
+    sessionVersion++
+  },
   scenes: (signal?: AbortSignal) => request<Scene[]>('/scenes', { signal }),
   create: (title: string, target: string, source: Source) =>
     request<Scene>('/scenes', json({ title, target, source })),
+  rename: (id: string, title: string) =>
+    request<Scene>(scenePath(id), { ...json({ title }), method: 'PATCH' }),
+  archive: (id: string) => request<Scene>(scenePath(id) + '/archive', { method: 'POST' }),
+  restore: (id: string) => request<Scene>(scenePath(id) + '/restore', { method: 'POST' }),
   frames: (id: string, signal?: AbortSignal) =>
     request<Frame[]>(scenePath(id) + '/frames', { signal }),
   upload: (id: string, file: File, view: string, capture: string) => {

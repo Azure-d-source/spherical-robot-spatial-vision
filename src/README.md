@@ -6,12 +6,14 @@
 | --- | --- |
 | `workers/` | 视频抽帧，以及领取作业并调用 DA3、COLMAP、Brush 和 SplatTransform。 |
 | `web/` | 场景、照片、批次、作业状态、注册覆盖、点云与 3DGS 查看、虚拟相机取景。 |
-| `api/` | FastAPI 管理场景、原图、批次、作业租约和产物发布。SQLite 保存任务记录。 |
+| `api/` | FastAPI 管理场景、原图、批次、作业租约和产物发布。`api/platform/` 提供使用 PostgreSQL 和账号登录的团队工作台。 |
 | `edge/` | 实体球接入阶段。设备拍照、缓存和传输。 |
 
 文件交接与验收依据见 [系统架构](../docs/design/platform-architecture.md)和[实施指南](../docs/design/implementation-guide.md)。
 
 ## 本地启动工作台
+
+使用账号登录的答辩和内测环境见 [团队工作台启动说明](api/platform/README.md)。下面是历史 SQLite 原型的本地启动方式。
 
 从仓库根目录执行。开发环境使用 Python 3.12 和 Node.js 22.12 或更高版本。数据默认保存在 `data/runtime/`，可通过 `SPATIAL_DATA_DIR` 指定其他目录。
 

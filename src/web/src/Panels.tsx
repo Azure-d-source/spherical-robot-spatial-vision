@@ -62,6 +62,7 @@ export function Gallery({
   previewId,
   freeze,
   busy,
+  readOnly,
   clear,
   selectAll,
 }: {
@@ -75,16 +76,17 @@ export function Gallery({
   previewId?: string
   freeze: () => void
   busy: boolean
+  readOnly: boolean
   clear: () => void
   selectAll: () => void
 }) {
   return (
-    <section className="card gallery">
+    <section className={'card gallery' + (readOnly ? ' span-all' : '')}>
       <div className="card-heading">
         <h2>
           采集照片 <span className="counter">{frames.length}</span>
         </h2>
-        {frames.length > 0 && (
+        {frames.length > 0 && !readOnly && (
           <button
             className="text-button"
             disabled={busy}
@@ -104,7 +106,7 @@ export function Gallery({
       )}
       {frames.length ? (
         <>
-          <p className="instructions">点击原图预览，按勾选顺序加入批次。</p>
+          {!readOnly && <p className="instructions">点击原图预览，按勾选顺序加入批次。</p>}
           <div className="frame-grid">
             {frames.map((f) => {
               const order = selected.indexOf(f.frame_id)
@@ -120,7 +122,7 @@ export function Gallery({
                   >
                     <img src={f.image_url} alt="" loading="lazy" />
                   </button>
-                  <label className={'pick' + (order >= 0 ? ' checked' : '')}>
+                  {!readOnly && <label className={'pick' + (order >= 0 ? ' checked' : '')}>
                     <input
                       type="checkbox"
                       disabled={busy}
@@ -129,7 +131,7 @@ export function Gallery({
                       aria-label={'加入批次 ' + f.filename}
                     />
                     <span aria-hidden="true">{order >= 0 ? order + 1 : ''}</span>
-                  </label>
+                  </label>}
                   <div className="frame-caption">
                     <strong title={f.filename}>{f.filename}</strong>
                     <small>{frameLabel(f.view_label)}</small>
@@ -138,14 +140,14 @@ export function Gallery({
               )
             })}
           </div>
-          <div className="batch-bar">
+          {!readOnly && <div className="batch-bar">
             <span>
               已选 <b>{selected.length}</b> 张
             </span>
             <button className="secondary" disabled={busy || !selected.length} onClick={freeze}>
               {busy ? '正在保存…' : '确认照片批次'}
             </button>
-          </div>
+          </div>}
         </>
       ) : (
         <div className="empty gallery-empty">
@@ -174,6 +176,7 @@ export function JobsPanel({
   preview,
   enqueue,
   busy,
+  readOnly,
 }: {
   frames: Frame[]
   revisions: Revision[]
@@ -184,6 +187,7 @@ export function JobsPanel({
   preview: (id: string) => void
   enqueue: (id: string, kind: Kind, recipeVersion: string) => Promise<void>
   busy: boolean
+  readOnly: boolean
 }) {
   const revision = revisions.find((item) => item.revision_id === revisionId) ?? revisions[0]
   const [mode, setMode] = useState<'points' | 'splat'>('points')
@@ -201,14 +205,14 @@ export function JobsPanel({
   )
   return (
     <div className="job-layout">
-      <section className="card">
+      <section className={'card' + (readOnly ? ' span-all' : '')}>
         <div className="card-heading">
           <h2>
             照片批次 <span className="counter">{revisions.length}</span>
           </h2>
         </div>
         {!revisions.length ? (
-          <p className="empty">在采集照片中勾选原图，确认后会生成批次。</p>
+          <p className="empty">{readOnly ? '暂无照片批次' : '在采集照片中勾选原图，确认后会生成批次。'}</p>
         ) : (
           <ul className="revision-list">
             {revisions.map((r) => (
@@ -255,7 +259,7 @@ export function JobsPanel({
           </details>
         )}
       </section>
-      <section className="card form-card">
+      {!readOnly && <section className="card form-card">
         <div className="card-heading">
           <h2>提交处理任务</h2>
         </div>
@@ -303,7 +307,7 @@ export function JobsPanel({
             {busy ? '正在提交…' : existing ? '该任务已提交' : '提交任务'}
           </button>
         </div>
-      </section>
+      </section>}
       {results.length > 0 && (
         <section className="card span-all">
           <div className="card-heading"><h2>批次 v{revision?.version} 的作业结果</h2></div>
@@ -314,6 +318,7 @@ export function JobsPanel({
                   {job.kind === 'splat'
                     ? job.recipe_version === 'public-32-v1' ? '公开 32 图验收' : '普通重建'
                     : kinds[job.kind]}
+                  {job.run_number !== undefined && ` · 第 ${job.run_number} 次运行`}
                 </strong>
                 {job.registration && (
                   <div className="hint">

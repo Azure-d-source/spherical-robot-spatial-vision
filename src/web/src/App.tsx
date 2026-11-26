@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, errorText, sources } from './api'
-import type { Frame, Job, Kind, Revision, Scene } from './api'
+import type { Account, Frame, Job, Kind, Revision, Scene, SceneStatus } from './api'
 import { SceneForm, UploadForm } from './Forms'
 import { Gallery, JobsPanel, Viewport } from './Panels'
 import { ViewerStage } from './components/viewers/ViewerStage'
 import type { ViewerMode } from './components/viewers/ViewerStage'
 import { frameLayout, initialLayout, layoutKey } from './simulationLayout'
 import type { SimulationLayout } from './simulationLayout'
+import { SceneManagement } from './SceneManagement'
+import { SessionGate, WorkbenchBrand } from './SessionGate'
+
+const sceneFilters: { status: 'all' | SceneStatus; label: string }[] = [
+  { status: 'all', label: '全部' },
+  { status: 'active', label: '进行中' },
+  { status: 'archived', label: '已归档' },
+]
 
 function newestJobs(jobs: Job[]) {
   return [...jobs].sort(
@@ -19,9 +27,13 @@ function newestJobs(jobs: Job[]) {
 function Studio({
   scene,
   revisionTick,
+  canManage,
+  onSceneChange,
 }: {
   scene: Scene
   revisionTick: number
+  canManage: boolean
+  onSceneChange: (scene: Scene) => void
 }) {
   const [frames, setFrames] = useState<Frame[]>([])
   const [revisions, setRevisions] = useState<Revision[]>([])
@@ -41,6 +53,7 @@ function Studio({
   const [error, setError] = useState('')
   const [dataTick, reload] = useState(0)
   const seq = useRef(0)
+  const archived = scene.status === 'archived'
   const hasActiveJobs = jobs.some(
     (job) => job.status === 'queued' || job.status === 'running',
   )
@@ -147,7 +160,7 @@ function Studio({
     preview(revisions.find((item) => item.revision_id === id)?.frame_ids[0] ?? '')
   }
   async function freeze() {
-    if (busy || !selected.length) return
+    if (archived || busy || !selected.length) return
     setBusy(true)
     setError('')
     setNotice('')
@@ -173,7 +186,7 @@ function Studio({
     }
   }
   async function enqueue(id: string, kind: Kind, recipeVersion: string) {
-    if (busy) return
+    if (archived || busy) return
     setBusy(true)
     setError('')
     setNotice('')
@@ -194,7 +207,7 @@ function Studio({
   const activeRevision =
     revisions.find((revision) => revision.revision_id === revisionId) ??
     revisions[0]
-  const visibleFrameId = tab === 'jobs' && activeRevision && previewId && !activeRevision.frame_ids.includes(previewId)
+  const visibleFrameId = tab === 'jobs' && activeRevision && !activeRevision.frame_ids.includes(previewId)
     ? activeRevision.frame_ids[0]
     : previewId
   const frame = frames.find((f) => f.frame_id === visibleFrameId)
@@ -218,6 +231,8 @@ function Studio({
         </div>
         <div className="source-pill">{sources[scene.source]}</div>
       </div>
+      {canManage && <SceneManagement scene={scene} onChange={onSceneChange} />}
+      {archived && <p className="notice archive-notice" role="status">场景已归档，仅可查看照片、批次和重建结果。</p>}
       {scene.target && (
         <p className="target-line">
           采集目标 <strong>{scene.target}</strong>
@@ -229,7 +244,7 @@ function Studio({
           aria-pressed={tab === 'capture'}
           onClick={() => setTab('capture')}
         >
-          照片采集
+          {archived ? '照片回看' : '照片采集'}
         </button>
         <button
           className={tab === 'jobs' ? 'active' : ''}
@@ -266,7 +281,7 @@ function Studio({
       )}
       <div className="capture-grid">
         <ViewerStage
-          className={tab === 'jobs' ? 'span-all' : undefined}
+          className={tab === 'jobs' || archived ? 'span-all' : undefined}
           sceneId={scene.scene_id}
           revision={activeRevision}
           revisions={revisions}
@@ -274,7 +289,8 @@ function Studio({
           jobs={jobs}
           frame={frame}
           view={view}
-          mode={viewerMode}
+          mode={archived && viewerMode === 'virtual' ? 'camera' : viewerMode}
+          readOnly={archived}
           onMode={(mode) => {
             if (mode === 'virtual') showLayout(layoutKey(layout))
             setViewerMode(mode)
@@ -287,7 +303,7 @@ function Studio({
         />
         {tab === 'capture' ? (
           <>
-            <UploadForm
+            {!archived && <UploadForm
               sceneId={scene.scene_id}
               view={view}
               setView={setView}
@@ -295,7 +311,7 @@ function Studio({
                 showLayout('')
                 uploaded(accepted)
               }}
-            />
+            />}
             <Gallery
               frames={galleryFrames}
               layouts={layoutChoices}
@@ -305,6 +321,7 @@ function Studio({
               previewId={previewId}
               preview={showFrame}
               busy={busy || loading}
+              readOnly={archived}
               clear={() => setSelected([])}
               selectAll={() => setSelected(galleryFrames.map((f) => f.frame_id))}
               toggle={(id) =>
@@ -327,6 +344,7 @@ function Studio({
               preview={showFrame}
               enqueue={enqueue}
               busy={busy || loading}
+              readOnly={archived}
             />
           </div>
         )}
@@ -335,16 +353,21 @@ function Studio({
   )
 }
 
-export function App() {
+function Workbench({ account, onLogout }: {
+  account?: Account
+  onLogout?: () => Promise<void>
+}) {
   const [scenes, setScenes] = useState<Scene[]>([])
   const [selected, setSelected] = useState('')
   const [creating, setCreating] = useState(false)
+  const [filter, setFilter] = useState<'all' | SceneStatus>('all')
   const [tick, refresh] = useState(0)
   const [error, setError] = useState('')
   const [health, setHealth] = useState<'connecting' | 'online' | 'offline'>(
     'connecting',
   )
   const [loading, setLoading] = useState(true)
+  const [loggingOut, setLoggingOut] = useState(false)
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
@@ -363,11 +386,6 @@ export function App() {
       .then((items) => {
         if (controller.signal.aborted) return
         setScenes(items)
-        setSelected((id) =>
-          items.some((s) => s.scene_id === id)
-            ? id
-            : (items[0]?.scene_id ?? ''),
-        )
       })
       .catch((err) => {
         if (!controller.signal.aborted) setError(errorText(err))
@@ -383,11 +401,31 @@ export function App() {
       ...old.filter((s) => s.scene_id !== scene.scene_id),
     ])
     setSelected(scene.scene_id)
+    setFilter('all')
     setCreating(false)
     setError('')
     refresh((t) => t + 1)
   }
-  const scene = scenes.find((s) => s.scene_id === selected)
+  function updateScene(scene: Scene) {
+    setScenes((old) => old.map((item) => item.scene_id === scene.scene_id ? scene : item))
+    refresh((value) => value + 1)
+  }
+
+  async function logout() {
+    if (!onLogout || loggingOut) return
+    setLoggingOut(true)
+    setError('')
+    try {
+      await onLogout()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
+  const visibleScenes = filter === 'all' ? scenes : scenes.filter((item) => item.status === filter)
+  const scene = visibleScenes.find((item) => item.scene_id === selected) ?? visibleScenes[0]
   const status = {
     connecting: '连接中',
     online: 'API 在线',
@@ -396,13 +434,7 @@ export function App() {
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            <i />
-          </span>
-          <strong>绕物成景</strong>
-        </div>
-        <span className="brand-sub">空间视觉工作台</span>
+        <WorkbenchBrand />
         <div className="server-state" role="status">
           <i className={health} />
           {status}
@@ -414,21 +446,40 @@ export function App() {
         >
           <span aria-hidden="true">↻</span> 刷新
         </button>
+        {account && (
+          <>
+            <span className="account-label" title={account.email}>{account.email}</span>
+            <button className="secondary logout" disabled={loggingOut} onClick={() => void logout()}>
+              {loggingOut ? '正在退出…' : '退出登录'}
+            </button>
+          </>
+        )}
       </header>
       <aside className="sidebar">
         <div className="side-head">
           <h2>场景列表</h2>
-          <span className="side-count">{scenes.length}</span>
+          <span className="side-count">{visibleScenes.length}</span>
         </div>
         <button className="new-scene" onClick={() => setCreating(true)}>
           <b aria-hidden="true">＋</b> 新建场景
         </button>
+        {account && (
+          <div className="scene-filters" role="group" aria-label="筛选场景状态">
+            {sceneFilters.map(({ status, label }) => (
+              <button key={status} aria-pressed={filter === status}
+                onClick={() => {
+                  setFilter(status)
+                  setCreating(false)
+                }}>{label}</button>
+            ))}
+          </div>
+        )}
         <nav aria-label="场景列表">
-          {scenes.map((s) => (
+          {visibleScenes.map((s) => (
             <button
               className={
                 'scene-link' +
-                (s.scene_id === selected && !creating ? ' active' : '')
+                (s.scene_id === scene?.scene_id && !creating ? ' active' : '')
               }
               key={s.scene_id}
               onClick={() => {
@@ -436,7 +487,7 @@ export function App() {
                 setCreating(false)
               }}
               aria-current={
-                s.scene_id === selected && !creating ? 'true' : undefined
+                s.scene_id === scene?.scene_id && !creating ? 'true' : undefined
               }
             >
               <span className="cube-icon" aria-hidden="true">
@@ -444,12 +495,12 @@ export function App() {
               </span>
               <span>
                 <strong>{s.title}</strong>
-                <small>{sources[s.source]}</small>
+                <small>{s.status === 'archived' ? '已归档' : sources[s.source]}</small>
               </span>
             </button>
           ))}
         </nav>
-        {!scenes.length && (
+        {!visibleScenes.length && (
           <p className="side-empty">
             {loading ? '正在读取场景…' : error ? '场景读取失败' : '尚无场景'}
           </p>
@@ -473,7 +524,11 @@ export function App() {
           </div>
         )}
         {scene && !creating ? (
-          <Studio key={scene.scene_id} scene={scene} revisionTick={tick} />
+          <Studio key={scene.scene_id} scene={scene} revisionTick={tick}
+            canManage={!!account && (account.role === 'admin' || account.account_id === scene.owner_id)}
+            onSceneChange={updateScene} />
+        ) : filter === 'archived' && !creating ? (
+          <p className="empty">{loading ? '正在读取已归档场景…' : '暂无已归档场景'}</p>
         ) : (
           <>
             <div className="workspace-heading">
@@ -492,12 +547,20 @@ export function App() {
               <Viewport view="正面" />
               <SceneForm
                 created={created}
-                cancel={scene ? () => setCreating(false) : undefined}
+                cancel={creating ? () => setCreating(false) : undefined}
               />
             </div>
           </>
         )}
       </main>
     </div>
+  )
+}
+
+export function App() {
+  return (
+    <SessionGate>
+      {(account, logout) => <Workbench account={account} onLogout={logout} />}
+    </SessionGate>
   )
 }

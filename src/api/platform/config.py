@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 from sqlalchemy.engine import make_url
 
-from ..settings import ROOT
+from ..settings import DEFAULT_WEB_DIST, ROOT
 
 DEFAULT_DATA_DIR = ROOT / "data" / "platform-runtime"
 
@@ -16,6 +16,7 @@ class PlatformSettings:
     public_origin: str = "http://127.0.0.1:8001"
     data_dir: Path = DEFAULT_DATA_DIR
     worker_token: str | None = field(default=None, repr=False)
+    web_dist: Path = DEFAULT_WEB_DIST
 
     def __post_init__(self):
         if make_url(self.database_url).drivername != "postgresql+psycopg":
