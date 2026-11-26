@@ -905,6 +905,45 @@ select {
   color: var(--muted);
   font-size: 0.75rem;
 }
+.frame-history {
+  margin-top: 0.4rem;
+  min-height: 24px;
+}
+.upload-history {
+  width: min(31rem, calc(100vw - 2rem));
+  max-height: 85vh;
+  padding: 0;
+  color: inherit;
+  overflow: auto;
+}
+.upload-history::backdrop {
+  background: rgb(7 13 20 / 75%);
+}
+.upload-history .card-heading {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+.upload-history .form-body {
+  overflow-wrap: anywhere;
+}
+.upload-history-list {
+  display: grid;
+  gap: 0.9rem;
+  list-style: none;
+  padding: 0;
+}
+.upload-history-list li {
+  display: grid;
+  gap: 0.25rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+.upload-history-list span,
+.upload-history-list time {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
 .batch-bar {
   display: flex;
   justify-content: space-between;

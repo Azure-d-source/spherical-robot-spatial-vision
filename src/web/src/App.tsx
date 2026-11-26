@@ -9,6 +9,7 @@ import { frameLayout, initialLayout, layoutKey } from './simulationLayout'
 import type { SimulationLayout } from './simulationLayout'
 import { SceneManagement } from './SceneManagement'
 import { SessionGate, WorkbenchBrand } from './SessionGate'
+import { UploadHistoryDialog } from './UploadHistoryDialog'
 
 const sceneFilters: { status: 'all' | SceneStatus; label: string }[] = [
   { status: 'all', label: '全部' },
@@ -29,13 +30,16 @@ function Studio({
   revisionTick,
   canManage,
   onSceneChange,
+  showUploadHistory,
 }: {
   scene: Scene
   revisionTick: number
   canManage: boolean
   onSceneChange: (scene: Scene) => void
+  showUploadHistory: boolean
 }) {
   const [frames, setFrames] = useState<Frame[]>([])
+  const [historyFrame, setHistoryFrame] = useState<Frame>()
   const [revisions, setRevisions] = useState<Revision[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [selected, setSelected] = useState<string[]>([])
@@ -322,6 +326,7 @@ function Studio({
               preview={showFrame}
               busy={busy || loading}
               readOnly={archived}
+              showUploads={showUploadHistory ? setHistoryFrame : undefined}
               clear={() => setSelected([])}
               selectAll={() => setSelected(galleryFrames.map((f) => f.frame_id))}
               toggle={(id) =>
@@ -349,6 +354,9 @@ function Studio({
           </div>
         )}
       </div>
+      {historyFrame && (
+        <UploadHistoryDialog sceneId={scene.scene_id} frame={historyFrame} onClose={() => setHistoryFrame(undefined)} />
+      )}
     </>
   )
 }
@@ -526,7 +534,7 @@ function Workbench({ account, onLogout }: {
         {scene && !creating ? (
           <Studio key={scene.scene_id} scene={scene} revisionTick={tick}
             canManage={!!account && (account.role === 'admin' || account.account_id === scene.owner_id)}
-            onSceneChange={updateScene} />
+            onSceneChange={updateScene} showUploadHistory={!!account} />
         ) : filter === 'archived' && !creating ? (
           <p className="empty">{loading ? '正在读取已归档场景…' : '暂无已归档场景'}</p>
         ) : (

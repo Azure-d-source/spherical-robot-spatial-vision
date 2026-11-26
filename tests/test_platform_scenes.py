@@ -193,9 +193,18 @@ class PlatformApiTests(unittest.TestCase):
             history_url = scene + f"/frames/{frame['frame_id']}/uploads"
             history = owner.get(history_url).json()
             self.assertEqual(
-                {(item["uploader_id"], item["capture_id"], item["view_label"]) for item in history},
-                {(self.owner, "shot", "正面"), (member_id, "shot", "侧面")},
+                {(item["uploader_id"], item["uploader_email"], item["capture_id"], item["view_label"])
+                 for item in history},
+                {(self.owner, "owner@example.test", "shot", "正面"),
+                 (member_id, "member@example.test", "shot", "侧面")},
             )
+            timestamps = [datetime.fromisoformat(item["created_at"]) for item in history]
+            self.assertEqual(timestamps, sorted(timestamps))
+            self.assertTrue(all(date.utcoffset() == timedelta(0) for date in timestamps))
+            self.assertNotIn("uploader_email", frame)
+            wrong_scene = self.create_scene(member)
+            wrong_url = wrong_scene + f"/frames/{frame['frame_id']}/uploads"
+            self.assertEqual(member.get(wrong_url).status_code, 404)
             retry = self.upload(member, scene, raw, view_label="不同的重试标签")
             self.assertEqual((retry.status_code, retry.json()), (200, frame))
             conflict = self.upload(member, scene, self.photo("red"))
@@ -220,11 +229,13 @@ class PlatformApiTests(unittest.TestCase):
             outside = TestClient(app, base_url=ORIGIN)
             self.addCleanup(outside.close)
             self.assertEqual(outside.get(frame["image_url"]).status_code, 401)
+            history_url = scene + f"/frames/{frame['frame_id']}/uploads"
+            self.assertEqual(outside.get(history_url).status_code, 401)
             self.logged_in(outside, "outsider@example.test")
             self.assertEqual(outside.get(scene + "/frames").status_code, 404)
             self.assertEqual(self.upload(outside, scene, raw).status_code, 404)
             self.assertEqual(outside.get(frame["image_url"]).status_code, 404)
-            self.assertEqual(outside.get(scene + f"/frames/{frame['frame_id']}/uploads").status_code, 404)
+            self.assertEqual(outside.get(history_url).status_code, 404)
             other = self.create_scene(outside)
             other_upload = self.upload(outside, other, raw)
             self.assertEqual(other_upload.status_code, 201)
@@ -562,6 +573,9 @@ class PlatformApiTests(unittest.TestCase):
             self.assertEqual(colleague.post(scene + "/restore").status_code, 403)
             self.assertEqual(len(colleague.get(scene + "/frames").json()), 4)
             self.assertEqual(colleague.get(spare["image_url"]).status_code, 200)
+            history = colleague.get(f"{scene}/frames/{spare['frame_id']}/uploads")
+            self.assertEqual(history.status_code, 200)
+            self.assertEqual([record["uploader_email"] for record in history.json()], ["colleague@example.test"])
             self.assertEqual(colleague.get(scene + "/revisions").json(), [revision])
             self.assertEqual(colleague.get(old["artifacts"][0]["url"]).status_code, 200)
             result_url = f"{scene}/revisions/{revision['revision_id']}/results"

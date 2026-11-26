@@ -53,7 +53,7 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 | `POST /api/scenes/{scene_id}/archive`、`POST /api/scenes/{scene_id}/restore` | 创建者或管理员可归档或恢复，返回场景当前状态。重复操作返回已有状态。 |
 | `POST /api/scenes/{scene_id}/frames` | 表单包含 `image`、`capture_id`，可选 `view_label`、带时区的 `captured_at`。新照片返回 `201`，复用照片返回 `200`。 |
 | `GET /api/scenes/{scene_id}/frames` | 按上传顺序返回去重后的照片及原图地址。 |
-| `GET /api/scenes/{scene_id}/frames/{frame_id}/uploads` | 返回谁上传了同一张照片，含各自的采集编号、机位和时间。 |
+| `GET /api/scenes/{scene_id}/frames/{frame_id}/uploads` | 同队成员可按上传时间查看记录。返回上传人编号、账号邮箱 `uploader_email`、采集编号、机位、采集时间 `captured_at` 和上传时间 `created_at`。 |
 | `GET /api/frames/{frame_id}/image` | 登录后按照片所属场景校验团队权限，并返回原图。 |
 | `DELETE /api/scenes/{scene_id}/frames/{frame_id}` | 首次上传者、场景创建者或管理员可撤下未用于批次的照片。成功和重复撤下均返回 `204`。已用于批次时返回 `409 FRAME_IN_USE`。 |
 | `POST /api/scenes/{scene_id}/revisions` | 提交有序的 `frame_ids`，新建返回 `201`，完全相同的清单复用时返回 `200`。照片已撤下时返回 `409 FRAME_WITHDRAWN`。 |
@@ -67,6 +67,8 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 声明的业务错误用 `code` 和 `message`，请求校验失败额外返回 `fields`。会话令牌在客户端以 HttpOnly Cookie 保存，数据库存令牌哈希和过期时间。
 
 同一场景内，照片按文件内容合并，照片列表保留首次上传的原图信息。每位成员有自己的上传记录。同一成员用同一个 `capture_id` 重传相同内容时复用原记录，换成不同内容会返回 `409 CAPTURE_CONFLICT`。其他成员即使用了同一个编号，也能留下自己的上传记录。上传支持静态 JPEG、PNG 和 WebP，每张最多 12 MiB、2400 万像素。
+
+点击照片卡片的「上传记录」后，工作台读取该照片的记录，并显示每次上传的账号邮箱、机位和上传时间。归档场景仍可查看。
 
 撤下后，照片从常规列表和原图入口移出，数据库保留操作人与时间、上传历史及原文件。旧采集编号的重试会返回照片的撤下状态。用户明确用新编号重新上传相同文件时，产生一条新的可选照片记录，磁盘复用原文件。
 

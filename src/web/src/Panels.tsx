@@ -63,6 +63,7 @@ export function Gallery({
   freeze,
   busy,
   readOnly,
+  showUploads,
   clear,
   selectAll,
 }: {
@@ -77,6 +78,7 @@ export function Gallery({
   freeze: () => void
   busy: boolean
   readOnly: boolean
+  showUploads?: (frame: Frame) => void
   clear: () => void
   selectAll: () => void
 }) {
@@ -135,6 +137,12 @@ export function Gallery({
                   <div className="frame-caption">
                     <strong title={f.filename}>{f.filename}</strong>
                     <small>{frameLabel(f.view_label)}</small>
+                    {showUploads && (
+                      <button className="text-button frame-history"
+                        aria-label={f.filename + ' 的上传记录'} onClick={() => showUploads(f)}>
+                        上传记录
+                      </button>
+                    )}
                   </div>
                 </article>
               )

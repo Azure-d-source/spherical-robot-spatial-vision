@@ -23,6 +23,12 @@ export interface Frame {
   image_url: string
   created_at: string
 }
+export interface UploadRecord {
+  upload_id: string
+  uploader_email: string
+  view_label: string
+  created_at: string
+}
 export interface Revision {
   revision_id: string
   version: number
@@ -121,6 +127,8 @@ export const api = {
   restore: (id: string) => request<Scene>(scenePath(id) + '/restore', { method: 'POST' }),
   frames: (id: string, signal?: AbortSignal) =>
     request<Frame[]>(scenePath(id) + '/frames', { signal }),
+  uploadHistory: (sceneId: string, frameId: string, signal?: AbortSignal) =>
+    request<UploadRecord[]>(scenePath(sceneId) + '/frames/' + encodeURIComponent(frameId) + '/uploads', { signal }),
   upload: (id: string, file: File, view: string, capture: string) => {
     const body = new FormData()
     body.set('image', file)

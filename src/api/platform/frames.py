@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from ..images import MAX_REQUEST, photo_path, read_image, save_image
 from ..models import Frame as FrameResponse
-from .accounts import CurrentAccount, UNAUTHENTICATED
+from .accounts import Account, CurrentAccount, UNAUTHENTICATED
 from .database import Base, Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
 from .revision_models import RevisionFrame
@@ -98,6 +98,7 @@ class UploadRecord(BaseModel):
     upload_id: str
     frame_id: str
     uploader_id: str
+    uploader_email: str
     capture_id: str
     view_label: str
     captured_at: datetime
@@ -233,12 +234,19 @@ def withdraw_frame(scene_id: str, frame_id: str, account: CurrentAccount, db: Da
 
 @router.get("/scenes/{scene_id}/frames/{frame_id}/uploads", response_model=list[UploadRecord],
             responses=PHOTO_ACCESS_ERRORS)
-def frame_uploads(scene_id: str, frame_id: str, account: CurrentAccount, db: Database) -> list[FrameUpload]:
+def frame_uploads(scene_id: str, frame_id: str, account: CurrentAccount, db: Database) -> list[UploadRecord]:
     require_scene(db, account.team_id, scene_id)
     if db.scalar(select(Frame.frame_id).where(Frame.frame_id == frame_id, Frame.scene_id == scene_id)) is None:
         raise ApiError(404, "FRAME_NOT_FOUND", "未找到该照片。")
-    query = select(FrameUpload).where(FrameUpload.frame_id == frame_id)
-    return list(db.scalars(query.order_by(FrameUpload.created_at, FrameUpload.upload_id)))
+    query = (
+        select(FrameUpload.upload_id, FrameUpload.frame_id, FrameUpload.uploader_id,
+               Account.email.label("uploader_email"), FrameUpload.capture_id, FrameUpload.view_label,
+               FrameUpload.captured_at, FrameUpload.created_at)
+        .join(Account, Account.account_id == FrameUpload.uploader_id)
+        .where(FrameUpload.scene_id == scene_id, FrameUpload.frame_id == frame_id, Account.team_id == account.team_id)
+        .order_by(FrameUpload.created_at, FrameUpload.upload_id)
+    )
+    return [UploadRecord.model_validate(row) for row in db.execute(query)]
 
 
 @router.get("/frames/{frame_id}/image", response_class=FileResponse, responses=PHOTO_ACCESS_ERRORS)
