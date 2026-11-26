@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, errorText, sources } from './api'
+import { api, ApiError, errorText, sources } from './api'
 import type { Account, Frame, Job, Kind, Revision, Scene, SceneStatus } from './api'
 import { SceneForm, UploadForm } from './Forms'
 import { Gallery, JobsPanel, Viewport } from './Panels'
@@ -10,6 +10,7 @@ import type { SimulationLayout } from './simulationLayout'
 import { SceneManagement } from './SceneManagement'
 import { SessionGate, WorkbenchBrand } from './SessionGate'
 import { UploadHistoryDialog } from './UploadHistoryDialog'
+import { WithdrawPhotoDialog } from './WithdrawPhotoDialog'
 
 const sceneFilters: { status: 'all' | SceneStatus; label: string }[] = [
   { status: 'all', label: '全部' },
@@ -30,16 +31,17 @@ function Studio({
   revisionTick,
   canManage,
   onSceneChange,
-  showUploadHistory,
+  accountId,
 }: {
   scene: Scene
   revisionTick: number
   canManage: boolean
   onSceneChange: (scene: Scene) => void
-  showUploadHistory: boolean
+  accountId?: string
 }) {
   const [frames, setFrames] = useState<Frame[]>([])
   const [historyFrame, setHistoryFrame] = useState<Frame>()
+  const [withdrawCandidate, setWithdrawCandidate] = useState<Frame>()
   const [revisions, setRevisions] = useState<Revision[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [selected, setSelected] = useState<string[]>([])
@@ -163,6 +165,21 @@ function Studio({
     choose(id)
     preview(revisions.find((item) => item.revision_id === id)?.frame_ids[0] ?? '')
   }
+  async function withdrawPhoto(item: Frame) {
+    try {
+      await api.withdrawFrame(scene.scene_id, item.frame_id)
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'FRAME_IN_USE') reload((value) => value + 1)
+      throw err
+    }
+    // Discard reads that may have captured the photo before it was withdrawn.
+    seq.current++
+    setFrames((items) => items.filter((photo) => photo.frame_id !== item.frame_id))
+    setSelected((ids) => ids.filter((id) => id !== item.frame_id))
+    preview((id) => id === item.frame_id ? '' : id)
+    setNotice(`已撤下「${item.filename}」。`)
+    reload((value) => value + 1)
+  }
   async function freeze() {
     if (archived || busy || !selected.length) return
     setBusy(true)
@@ -218,6 +235,7 @@ function Studio({
   const frameLayouts = new Map(frames.map((f) => [f.frame_id, frameLayout(f.view_label) ?? '']))
   const layoutChoices = [...new Set(['', ...frameLayouts.values(), galleryLayout])]
   const galleryFrames = frames.filter((f) => frameLayouts.get(f.frame_id) === galleryLayout)
+  const frozenFrameIds = new Set(revisions.flatMap((revision) => revision.frame_ids))
   const revisionLayouts = new Map<string, string>()
   for (const revision of revisions) {
     const key = frameLayouts.get(revision.frame_ids[0])
@@ -326,7 +344,10 @@ function Studio({
               preview={showFrame}
               busy={busy || loading}
               readOnly={archived}
-              showUploads={showUploadHistory ? setHistoryFrame : undefined}
+              showUploads={accountId ? setHistoryFrame : undefined}
+              frozenFrameIds={frozenFrameIds}
+              canWithdraw={(photo) => canManage || (!!accountId && photo.uploader_id === accountId)}
+              withdraw={setWithdrawCandidate}
               clear={() => setSelected([])}
               selectAll={() => setSelected(galleryFrames.map((f) => f.frame_id))}
               toggle={(id) =>
@@ -356,6 +377,10 @@ function Studio({
       </div>
       {historyFrame && (
         <UploadHistoryDialog sceneId={scene.scene_id} frame={historyFrame} onClose={() => setHistoryFrame(undefined)} />
+      )}
+      {withdrawCandidate && (
+        <WithdrawPhotoDialog frame={withdrawCandidate} onConfirm={withdrawPhoto}
+          onClose={() => setWithdrawCandidate(undefined)} />
       )}
     </>
   )
@@ -534,7 +559,7 @@ function Workbench({ account, onLogout }: {
         {scene && !creating ? (
           <Studio key={scene.scene_id} scene={scene} revisionTick={tick}
             canManage={!!account && (account.role === 'admin' || account.account_id === scene.owner_id)}
-            onSceneChange={updateScene} showUploadHistory={!!account} />
+            onSceneChange={updateScene} accountId={account?.account_id} />
         ) : filter === 'archived' && !creating ? (
           <p className="empty">{loading ? '正在读取已归档场景…' : '暂无已归档场景'}</p>
         ) : (

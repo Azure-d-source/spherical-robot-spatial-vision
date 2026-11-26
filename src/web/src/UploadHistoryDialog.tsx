@@ -39,7 +39,7 @@ export function UploadHistoryDialog({ sceneId, frame, onClose }: {
   }, [sceneId, frame.frame_id, retry])
 
   return (
-    <dialog className="card upload-history" ref={dialog} aria-labelledby={titleId} onClose={onClose}>
+    <dialog className="card workbench-dialog upload-history" ref={dialog} aria-labelledby={titleId} onClose={onClose}>
       <div className="card-heading">
         <h2 id={titleId}>上传记录</h2>
         <button className="text-button" onClick={() => dialog.current?.close()}>关闭</button>

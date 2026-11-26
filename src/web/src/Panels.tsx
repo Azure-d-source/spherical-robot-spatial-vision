@@ -64,6 +64,9 @@ export function Gallery({
   busy,
   readOnly,
   showUploads,
+  frozenFrameIds,
+  canWithdraw,
+  withdraw,
   clear,
   selectAll,
 }: {
@@ -79,6 +82,9 @@ export function Gallery({
   busy: boolean
   readOnly: boolean
   showUploads?: (frame: Frame) => void
+  frozenFrameIds: ReadonlySet<string>
+  canWithdraw: (frame: Frame) => boolean
+  withdraw: (frame: Frame) => void
   clear: () => void
   selectAll: () => void
 }) {
@@ -138,10 +144,20 @@ export function Gallery({
                     <strong title={f.filename}>{f.filename}</strong>
                     <small>{frameLabel(f.view_label)}</small>
                     {showUploads && (
-                      <button className="text-button frame-history"
-                        aria-label={f.filename + ' 的上传记录'} onClick={() => showUploads(f)}>
-                        上传记录
-                      </button>
+                      <div className="frame-actions">
+                        <button className="text-button frame-history"
+                          aria-label={f.filename + ' 的上传记录'} onClick={() => showUploads(f)}>
+                          上传记录
+                        </button>
+                        {frozenFrameIds.has(f.frame_id) ? (
+                          <span className="frame-in-batch">已用于批次</span>
+                        ) : !readOnly && canWithdraw(f) && (
+                          <button className="text-button frame-withdraw" disabled={busy}
+                            aria-label={'撤下 ' + f.filename} onClick={() => withdraw(f)}>
+                            撤下
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </article>

@@ -905,26 +905,40 @@ select {
   color: var(--muted);
   font-size: 0.75rem;
 }
-.frame-history {
+.frame-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.6rem;
   margin-top: 0.4rem;
+}
+.frame-actions button {
   min-height: 24px;
 }
-.upload-history {
+.frame-in-batch {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.frame-withdraw,
+.frame-withdraw:hover:enabled {
+  color: #ffb5aa;
+}
+.workbench-dialog {
   width: min(31rem, calc(100vw - 2rem));
   max-height: 85vh;
   padding: 0;
   color: inherit;
   overflow: auto;
 }
-.upload-history::backdrop {
+.workbench-dialog::backdrop {
   background: rgb(7 13 20 / 75%);
 }
-.upload-history .card-heading {
+.workbench-dialog .card-heading {
   position: sticky;
   top: 0;
   background: var(--panel);
 }
-.upload-history .form-body {
+.workbench-dialog .form-body {
   overflow-wrap: anywhere;
 }
 .upload-history-list {
@@ -943,6 +957,25 @@ select {
 .upload-history-list time {
   color: var(--muted);
   font-size: 0.875rem;
+}
+.withdraw-description {
+  display: grid;
+  gap: 0.55rem;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.danger-action {
+  background: #4b2929;
+  color: #ffe0da;
+  border-color: #90615b;
+}
+.danger-action:hover:enabled {
+  background: #603434;
+  border-color: #b57d74;
 }
 .batch-bar {
   display: flex;

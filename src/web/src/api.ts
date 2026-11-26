@@ -22,6 +22,7 @@ export interface Frame {
   view_label: string
   image_url: string
   created_at: string
+  uploader_id?: string
 }
 export interface UploadRecord {
   upload_id: string
@@ -105,6 +106,7 @@ function json(body: unknown): RequestInit {
   }
 }
 const scenePath = (id: string) => '/scenes/' + encodeURIComponent(id)
+const framePath = (sceneId: string, frameId: string) => scenePath(sceneId) + '/frames/' + encodeURIComponent(frameId)
 
 export const api = {
   health: (signal?: AbortSignal) => request<{ status: string; workbench?: 'team' }>('/health', { signal }),
@@ -128,7 +130,9 @@ export const api = {
   frames: (id: string, signal?: AbortSignal) =>
     request<Frame[]>(scenePath(id) + '/frames', { signal }),
   uploadHistory: (sceneId: string, frameId: string, signal?: AbortSignal) =>
-    request<UploadRecord[]>(scenePath(sceneId) + '/frames/' + encodeURIComponent(frameId) + '/uploads', { signal }),
+    request<UploadRecord[]>(framePath(sceneId, frameId) + '/uploads', { signal }),
+  withdrawFrame: (sceneId: string, frameId: string) =>
+    request<void>(framePath(sceneId, frameId), { method: 'DELETE' }),
   upload: (id: string, file: File, view: string, capture: string) => {
     const body = new FormData()
     body.set('image', file)
