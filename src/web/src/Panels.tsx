@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { kinds, timeLabel } from './api'
+import { kinds, recipeLabel, timeLabel } from './api'
 import type { Frame, Job, Kind, Revision } from './api'
 import { OrbitView } from './OrbitView'
 import { frameLabel, layoutTitle } from './simulationLayout'
@@ -199,6 +199,7 @@ export function JobsPanel({
   choose,
   preview,
   enqueue,
+  onRerun,
   busy,
   readOnly,
 }: {
@@ -210,6 +211,7 @@ export function JobsPanel({
   choose: (id: string) => void
   preview: (id: string) => void
   enqueue: (id: string, kind: Kind, recipeVersion: string) => Promise<void>
+  onRerun?: (job: Job, batch: Revision) => void
   busy: boolean
   readOnly: boolean
 }) {
@@ -338,12 +340,17 @@ export function JobsPanel({
           <div className="form-body">
             {results.map((job) => (
               <div className="splat-result" key={job.job_id}>
-                <strong>
-                  {job.kind === 'splat'
-                    ? job.recipe_version === 'public-32-v1' ? '公开 32 图验收' : '普通重建'
-                    : kinds[job.kind]}
-                  {job.run_number !== undefined && ` · 第 ${job.run_number} 次运行`}
-                </strong>
+                <div className="job-result-heading">
+                  <strong>
+                    {job.kind === 'splat' ? recipeLabel(job) : kinds[job.kind]}
+                    {job.run_number !== undefined && ` · 第 ${job.run_number} 次运行`}
+                  </strong>
+                  {onRerun && revision && job.run_number !== undefined && (
+                    <button className="secondary" disabled={busy}
+                      aria-label={`重跑${kinds[job.kind]}第 ${job.run_number} 次运行`}
+                      onClick={() => onRerun(job, revision)}>重跑</button>
+                  )}
+                </div>
                 {job.registration && (
                   <div className="hint">
                     已注册 {job.registration.registered_images}/{job.registration.total_images} 张
@@ -389,7 +396,10 @@ export function JobsPanel({
               <tbody>
                 {jobs.map((j) => (
                   <tr key={j.job_id}>
-                    <td>{kinds[j.kind] ?? j.kind}</td>
+                    <td>
+                      {kinds[j.kind] ?? j.kind}
+                      {j.run_number !== undefined && <small className="job-run-number">第 {j.run_number} 次</small>}
+                    </td>
                     <td>
                       v{revisions.find((r) => r.revision_id === j.revision_id)?.version ?? '—'}
                     </td>

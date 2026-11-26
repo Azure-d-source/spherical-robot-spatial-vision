@@ -53,6 +53,9 @@ export interface Job {
   } | null
   artifacts?: { filename: string; url: string }[]
 }
+export interface TeamJob extends Job {
+  run_number: number
+}
 export const sources: Record<Source, string> = {
   sample: '手动样例',
   robot: '球形机器人',
@@ -62,6 +65,13 @@ export const kinds: Record<Kind, string> = {
   depth: '单图深度',
   fusion: '多图点云',
   splat: '3DGS 重建',
+}
+export const recipeLabel = (job: Job) => {
+  if (job.kind === 'splat') {
+    if (job.recipe_version === 'public-32-v1') return '公开 32 图验收'
+    if (job.recipe_version === 'v1') return '普通重建'
+  }
+  return job.recipe_version
 }
 export const views = ['正面', '左侧', '背面', '右侧', '顶部', '其他']
 
@@ -147,6 +157,11 @@ export const api = {
   jobs: (id: string, signal?: AbortSignal) => request<Job[]>(scenePath(id) + '/jobs', { signal }),
   enqueue: (revisionId: string, kind: Kind, recipeVersion = 'v1') =>
     request<Job>('/jobs', json({ revision_id: revisionId, kind, recipe_version: recipeVersion })),
+  rerun: (jobId: string, key: string) =>
+    request<TeamJob>('/jobs/' + encodeURIComponent(jobId) + '/rerun', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': key },
+    }),
 }
 
 export const errorText = (error: unknown) =>

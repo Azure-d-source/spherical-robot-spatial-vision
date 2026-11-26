@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, errorText, sources } from './api'
-import type { Account, Frame, Job, Kind, Revision, Scene, SceneStatus } from './api'
+import type { Account, Frame, Job, Kind, Revision, Scene, SceneStatus, TeamJob } from './api'
 import { SceneForm, UploadForm } from './Forms'
 import { Gallery, JobsPanel, Viewport } from './Panels'
 import { ViewerStage } from './components/viewers/ViewerStage'
@@ -11,6 +11,7 @@ import { SceneManagement } from './SceneManagement'
 import { SessionGate, WorkbenchBrand } from './SessionGate'
 import { UploadHistoryDialog } from './UploadHistoryDialog'
 import { WithdrawPhotoDialog } from './WithdrawPhotoDialog'
+import { RerunJobDialog } from './RerunJobDialog'
 
 const sceneFilters: { status: 'all' | SceneStatus; label: string }[] = [
   { status: 'all', label: '全部' },
@@ -42,6 +43,7 @@ function Studio({
   const [frames, setFrames] = useState<Frame[]>([])
   const [historyFrame, setHistoryFrame] = useState<Frame>()
   const [withdrawCandidate, setWithdrawCandidate] = useState<Frame>()
+  const [rerunCandidate, setRerunCandidate] = useState<{ job: Job; batch: Revision }>()
   const [revisions, setRevisions] = useState<Revision[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [selected, setSelected] = useState<string[]>([])
@@ -107,9 +109,10 @@ function Studio({
     async function poll() {
       const controller = new AbortController()
       request = controller
+      const version = seq.current
       try {
         const next = await api.jobs(scene.scene_id, controller.signal)
-        if (!controller.signal.aborted) setJobs(newestJobs(next))
+        if (!controller.signal.aborted && version === seq.current) setJobs(newestJobs(next))
       } catch {
         // Retry transient errors without discarding the last known results.
       } finally {
@@ -224,6 +227,12 @@ function Studio({
     } finally {
       setBusy(false)
     }
+  }
+  function rerunSubmitted(run: TeamJob) {
+    seq.current++
+    setJobs((items) => items.some((job) => job.job_id === run.job_id) ? items : newestJobs([run, ...items]))
+    setNotice(run.status === 'queued' ? `第 ${run.run_number} 次运行已入队。` : `已确认第 ${run.run_number} 次运行。`)
+    reload((value) => value + 1)
   }
   const activeRevision =
     revisions.find((revision) => revision.revision_id === revisionId) ??
@@ -369,6 +378,7 @@ function Studio({
               choose={selectRevision}
               preview={showFrame}
               enqueue={enqueue}
+              onRerun={!archived && accountId ? (job, batch) => setRerunCandidate({ job, batch }) : undefined}
               busy={busy || loading}
               readOnly={archived}
             />
@@ -381,6 +391,10 @@ function Studio({
       {withdrawCandidate && (
         <WithdrawPhotoDialog frame={withdrawCandidate} onConfirm={withdrawPhoto}
           onClose={() => setWithdrawCandidate(undefined)} />
+      )}
+      {rerunCandidate && (
+        <RerunJobDialog {...rerunCandidate} onSubmitted={rerunSubmitted}
+          onClose={() => setRerunCandidate(undefined)} />
       )}
     </>
   )

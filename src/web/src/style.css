@@ -821,6 +821,20 @@ select {
   width: fit-content;
   color: var(--teal);
 }
+.job-result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.job-result-heading button {
+  flex-shrink: 0;
+}
+.job-run-number {
+  margin-inline-start: 0.5rem;
+  color: var(--muted);
+  font-weight: normal;
+}
 .frame-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
@@ -967,6 +981,19 @@ select {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+.rerun-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.rerun-details dt {
+  color: var(--muted);
+}
+.rerun-details dd {
+  margin: 0;
 }
 .danger-action {
   background: #4b2929;
