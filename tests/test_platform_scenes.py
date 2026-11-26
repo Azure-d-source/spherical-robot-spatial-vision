@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Barrier
+from threading import Barrier, Event
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from src.api.images import MAX_BYTES, MAX_REQUEST
+from src.api.images import MAX_BYTES, MAX_REQUEST, read_image
 from src.api.platform.accounts import Account, COOKIE, LoginSession, Team, password_hasher, session_hash
 from src.api.platform.app import create_app
 from src.api.platform.config import PlatformSettings
@@ -508,3 +508,106 @@ class PlatformApiTests(unittest.TestCase):
             self.assertEqual(user.post(path + "/fail", json=terminal, headers=WORKER_HEADERS).status_code, 204)
             self.assertEqual(user.post(path + "/fail", json=terminal, headers=WORKER_HEADERS).status_code, 204)
             self.assertEqual(user.get("/api/jobs/" + created["job_id"]).json()["status"], "failed")
+
+    def test_archived_scene_remains_readable_and_existing_jobs_keep_running(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url=ORIGIN) as admin:
+            self.logged_in(admin, "owner@example.test")
+            member = TestClient(app, base_url=ORIGIN)
+            colleague = TestClient(app, base_url=ORIGIN)
+            self.addCleanup(member.close)
+            self.addCleanup(colleague.close)
+            self.logged_in(member, "member@example.test")
+            self.logged_in(colleague, "colleague@example.test")
+
+            scene, revision = self.frozen_fixture(member)
+            self.assertEqual(colleague.patch(scene, json={"title": "无权限"}).status_code, 403)
+            self.assertEqual(colleague.post(scene + "/archive").status_code, 403)
+            renamed = member.patch(scene, json={"title": "归档前改名"})
+            self.assertEqual((renamed.status_code, renamed.json()["title"]), (200, "归档前改名"))
+
+            payload = {"revision_id": revision["revision_id"], "kind": "splat"}
+            first = member.post("/api/jobs", json=payload).json()
+            original = self.claim(admin)
+            self.splat_output(original)
+            old = self.complete_job(admin, original)
+            self.assertEqual(first["job_id"], old["job_id"])
+            rerun_url = f"/api/jobs/{old['job_id']}/rerun"
+            waiting = member.post(rerun_url, headers={"Idempotency-Key": "before-archive"}).json()
+            spare = self.upload(colleague, scene, self.photo("white"), "spare").json()
+
+            archived = admin.post(scene + "/archive")
+            self.assertEqual((archived.status_code, archived.json()["status"], archived.json()["archived_by"]),
+                             (200, "archived", self.owner))
+            self.assertEqual(member.post(scene + "/archive").json(), archived.json())
+            self.assertEqual(colleague.get(scene).json(), archived.json())
+            self.assertEqual(colleague.get("/api/scenes?status=active").json(), [])
+            self.assertEqual(colleague.get("/api/scenes?status=archived").json(), [archived.json()])
+            self.assertEqual(colleague.get("/api/scenes").json(), [archived.json()])
+            self.assertEqual(colleague.post(scene + "/restore").status_code, 403)
+            self.assertEqual(len(colleague.get(scene + "/frames").json()), 4)
+            self.assertEqual(colleague.get(spare["image_url"]).status_code, 200)
+            self.assertEqual(colleague.get(scene + "/revisions").json(), [revision])
+            self.assertEqual(colleague.get(old["artifacts"][0]["url"]).status_code, 200)
+            result_url = f"{scene}/revisions/{revision['revision_id']}/results"
+            self.assertEqual(colleague.get(result_url).json()["splat"], old)
+
+            for result in (
+                member.patch(scene, json={"title": "只读"}),
+                self.upload(member, scene, self.photo("green"), "archived-photo"),
+                colleague.delete(scene + "/frames/" + spare["frame_id"]),
+                member.post(scene + "/revisions", json={"frame_ids": [spare["frame_id"]]}),
+                member.post("/api/jobs", json=payload),
+                member.post(rerun_url, headers={"Idempotency-Key": "on-archive"}),
+            ):
+                self.assertEqual((result.status_code, result.json()["code"]), (409, "SCENE_ARCHIVED"))
+
+            existing = self.claim(admin)
+            self.assertEqual(existing["job_id"], waiting["job_id"])
+            self.splat_output(existing)
+            completed = self.complete_job(admin, existing)
+            self.assertEqual(colleague.get(result_url).json()["splat"], completed)
+            self.assertEqual(colleague.get(completed["artifacts"][0]["url"]).status_code, 200)
+
+            outsider = TestClient(app, base_url=ORIGIN)
+            self.addCleanup(outsider.close)
+            self.logged_in(outsider, "outsider@example.test")
+            self.assertEqual(outsider.post(scene + "/restore").status_code, 404)
+            self.assertEqual(outsider.get(scene).status_code, 404)
+            restored = member.post(scene + "/restore")
+            self.assertEqual(restored.status_code, 200)
+            self.assertEqual(restored.json()["status"], "active")
+            self.assertIsNone(restored.json()["archived_at"])
+            self.assertEqual(admin.post(scene + "/restore").json(), restored.json())
+            self.assertEqual(self.upload(colleague, scene, self.photo("green"), "after").status_code, 201)
+            self.assertEqual(colleague.get(result_url).json()["splat"], completed)
+
+    def test_upload_rechecks_archive_after_decoding(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url=ORIGIN) as owner:
+            member = TestClient(app, base_url=ORIGIN)
+            self.addCleanup(member.close)
+            self.logged_in(owner, "owner@example.test")
+            self.logged_in(member, "member@example.test")
+            scene = self.create_scene(owner)
+            decoding, resume = Event(), Event()
+
+            def pause_after_read(upload):
+                data = read_image(upload)
+                decoding.set()
+                if not resume.wait(timeout=8):
+                    raise RuntimeError("Timed out waiting for archive")
+                return data
+
+            with patch("src.api.platform.frames.read_image", side_effect=pause_after_read):
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    pending = pool.submit(self.upload, member, scene, self.photo())
+                    try:
+                        self.assertTrue(decoding.wait(timeout=8))
+                        self.assertEqual(owner.post(scene + "/archive").json()["status"], "archived")
+                    finally:
+                        resume.set()
+                    result = pending.result(timeout=10)
+            self.assertEqual((result.status_code, result.json()["code"]), (409, "SCENE_ARCHIVED"))
+            self.assertEqual(member.get(scene + "/frames").json(), [])
+            self.assertEqual(list(app.state.photos.iterdir()), [])

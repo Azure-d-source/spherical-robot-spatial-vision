@@ -36,7 +36,9 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 | `GET /api/auth/me` | 返回已登录账号、团队和角色。 |
 | `POST /api/auth/logout` | 注销当前会话，返回 `204`。 |
 | `POST /api/scenes` | 接收已有的 `title`、`source` 和可选 `target`。从会话确定团队及创建者，返回 `201`。 |
-| `GET /api/scenes`、`GET /api/scenes/{scene_id}` | 只返回当前团队内的场景。跨团队详情请求返回 `404`。 |
+| `GET /api/scenes`、`GET /api/scenes/{scene_id}` | 只返回当前团队内的场景。列表默认返回全部场景，可用 `status=active` 或 `status=archived` 过滤。跨团队详情请求返回 `404`。 |
+| `PATCH /api/scenes/{scene_id}` | 创建者或管理员可修改进行中场景的 `title`。 |
+| `POST /api/scenes/{scene_id}/archive`、`POST /api/scenes/{scene_id}/restore` | 创建者或管理员可归档或恢复，返回场景当前状态。重复操作返回已有状态。 |
 | `POST /api/scenes/{scene_id}/frames` | 表单包含 `image`、`capture_id`，可选 `view_label`、带时区的 `captured_at`。新照片返回 `201`，复用照片返回 `200`。 |
 | `GET /api/scenes/{scene_id}/frames` | 按上传顺序返回去重后的照片及原图地址。 |
 | `GET /api/scenes/{scene_id}/frames/{frame_id}/uploads` | 返回谁上传了同一张照片，含各自的采集编号、机位和时间。 |
@@ -59,6 +61,8 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 批次按场景从第 1 版编号。修改选图顺序或补拍后确认，会形成新批次。不同场景的照片和不同仿真布局的照片不能混入同一批次。撤下与冻结在同一事务约束下校验，先完成的操作决定后续结果。
 
 同一批次、同一作业类型的运行号递增。默认结果是运行号最大的成功记录。更新的运行处于排队、执行或失败状态时，默认入口继续返回已有成功结果。较早的运行晚完成时，保留其历史产物。各次运行使用自己的下载地址。
+
+归档场景对团队成员只读。它保留照片、上传记录、批次、任务和产物，普通成员仍可查看原图和下载模型。归档后改名、上传、撤图、冻结、提交和重跑返回 `409 SCENE_ARCHIVED`。归档前提交的作业可以继续完成并发布；恢复场景后按原协作权限继续操作。
 
 ## 验收
 

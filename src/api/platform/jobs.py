@@ -16,7 +16,7 @@ from .accounts import CurrentAccount, UNAUTHENTICATED
 from .database import Base, Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
 from .revision_models import Revision, RevisionFrame
-from .scenes import Scene, require_scene
+from .scenes import Scene, require_scene, require_writable_scene
 
 router = APIRouter(prefix="/api", tags=["作业"])
 ACCESS_ERRORS = {**UNAUTHENTICATED, 404: {"model": ErrorResponse}}
@@ -82,9 +82,9 @@ class CurrentResults(BaseModel):
     splat: TeamJob | None = None
 
 
-def find_revision(db: Session, team_id: str, revision_id: str, *, lock: bool = False) -> Revision:
+def find_revision(db: Session, team_id: str, revision_id: str) -> Revision:
     query = select(Revision).join(Scene).where(Revision.revision_id == revision_id, Scene.team_id == team_id)
-    revision = db.scalar(query.with_for_update(of=Revision) if lock else query)
+    revision = db.scalar(query)
     if revision is None:
         raise ApiError(404, "REVISION_NOT_FOUND", "未找到批次。")
     return revision
@@ -140,9 +140,11 @@ def submit_run(
 
 
 @router.post("/jobs", status_code=202, response_model=TeamJob,
-             responses={**ACCESS_ERRORS, 422: {"model": ErrorResponse | InvalidRequest}})
+             responses={**ACCESS_ERRORS, 409: {"model": ErrorResponse},
+                        422: {"model": ErrorResponse | InvalidRequest}})
 def create_job(payload: JobInput, account: CurrentAccount, db: Database) -> JobRun:
-    find_revision(db, account.team_id, payload.revision_id, lock=True)
+    revision = find_revision(db, account.team_id, payload.revision_id)
+    require_writable_scene(db, account.team_id, revision.scene_id)
     return submit_run(db, account.account_id, payload, "initial")
 
 
@@ -151,7 +153,8 @@ def create_job(payload: JobInput, account: CurrentAccount, db: Database) -> JobR
                         422: {"model": ErrorResponse | InvalidRequest}})
 def rerun(job_id: str, idempotency_key: RerunKey, account: CurrentAccount, db: Database) -> JobRun:
     original = find_team_job(db, account.team_id, job_id)
-    find_revision(db, account.team_id, original.revision_id, lock=True)
+    revision = find_revision(db, account.team_id, original.revision_id)
+    require_writable_scene(db, account.team_id, revision.scene_id)
     payload = JobInput(revision_id=original.revision_id, kind=original.kind, recipe_version=original.recipe_version)
     return submit_run(db, account.account_id, payload, "rerun:" + idempotency_key, original.job_id)
 

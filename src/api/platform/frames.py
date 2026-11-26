@@ -20,7 +20,7 @@ from .accounts import CurrentAccount, UNAUTHENTICATED
 from .database import Base, Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
 from .revision_models import RevisionFrame
-from .scenes import Scene, require_scene
+from .scenes import Scene, require_active, require_scene, require_writable_scene
 
 router = APIRouter(prefix="/api", tags=["照片"])
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ def upload_frame(
     view_label: Annotated[str, Form(max_length=120)] = "",
     captured_at: Annotated[AwareDatetime | None, Form()] = None,
 ) -> Frame:
-    require_scene(db, account.team_id, scene_id)
+    require_active(require_scene(db, account.team_id, scene_id))
     capture_id = capture_id.strip()
     view_label = view_label.strip() or "未标注"
     if not capture_id:
@@ -160,7 +160,7 @@ def upload_frame(
         raise ApiError(exc.status_code, code, str(exc.detail)) from exc
 
     # Serialize deduplication and idempotency within one scene.
-    require_scene(db, account.team_id, scene_id, for_update=True)
+    require_writable_scene(db, account.team_id, scene_id)
     captured_frame = db.scalar(
         select(Frame).join(FrameUpload, FrameUpload.frame_id == Frame.frame_id).where(
             FrameUpload.scene_id == scene_id, FrameUpload.uploader_id == account.account_id,
@@ -214,7 +214,7 @@ def upload_frame(
 @router.delete("/scenes/{scene_id}/frames/{frame_id}", status_code=204,
                responses={**PHOTO_ACCESS_ERRORS, 403: {"model": ErrorResponse}, 409: {"model": ErrorResponse}})
 def withdraw_frame(scene_id: str, frame_id: str, account: CurrentAccount, db: Database) -> Response:
-    scene = require_scene(db, account.team_id, scene_id, for_update=True)
+    scene = require_writable_scene(db, account.team_id, scene_id)
     frame = db.scalar(select(Frame).where(Frame.scene_id == scene_id, Frame.frame_id == frame_id).with_for_update())
     if frame is None:
         raise ApiError(404, "FRAME_NOT_FOUND", "未找到该照片。")

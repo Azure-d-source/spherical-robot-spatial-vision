@@ -24,7 +24,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         engine = create_engine(settings.database_url, pool_pre_ping=True)
         try:
             with engine.connect() as connection:
-                connection.execute(select(jobs.JobRun.job_id).limit(1))
+                connection.execute(select(scenes.Scene.archived_at).limit(1))
         except BaseException:
             engine.dispose()
             raise

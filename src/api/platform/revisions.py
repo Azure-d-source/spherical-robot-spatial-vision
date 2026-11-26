@@ -16,7 +16,7 @@ from .database import Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
 from .frames import Frame
 from .revision_models import Revision, RevisionFrame
-from .scenes import require_scene
+from .scenes import require_scene, require_writable_scene
 
 router = APIRouter(prefix="/api/scenes/{scene_id}/revisions", tags=["批次"])
 ACCESS_ERRORS = {**UNAUTHENTICATED, 404: {"model": ErrorResponse}}
@@ -63,7 +63,7 @@ def create_revision(
         raise ApiError(422, "INVALID_FRAME_IDS", "请提交有效且不重复的照片编号。")
 
     # Keep numbering and identical-list retries consistent with concurrent writes.
-    require_scene(db, account.team_id, scene_id, for_update=True)
+    require_writable_scene(db, account.team_id, scene_id)
     fingerprint = sha256("".join(ids).encode("ascii")).hexdigest()
     existing = db.scalar(
         select(Revision).where(Revision.scene_id == scene_id, Revision.fingerprint == fingerprint)
