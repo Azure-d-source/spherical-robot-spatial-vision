@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import accounts, frames, revisions, scenes
+from . import accounts, frames, jobs, revisions, scenes, workers
 from .config import PlatformSettings
 from .database import Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
@@ -24,7 +24,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         engine = create_engine(settings.database_url, pool_pre_ping=True)
         try:
             with engine.connect() as connection:
-                connection.execute(select(revisions.RevisionFrame.frame_id).limit(1))
+                connection.execute(select(jobs.JobRun.job_id).limit(1))
         except BaseException:
             engine.dispose()
             raise
@@ -36,14 +36,20 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         app.state.sessions = sessionmaker(engine, expire_on_commit=False)
         try:
             await run_in_threadpool(app.state.photos.mkdir, parents=True, exist_ok=True)
+            await run_in_threadpool(app.state.staging.mkdir, parents=True, exist_ok=True)
+            await run_in_threadpool(app.state.artifacts.mkdir, parents=True, exist_ok=True)
             yield
         finally:
             await run_in_threadpool(engine.dispose)
 
     app = FastAPI(title="OrbitForge API", version="0.2.0", lifespan=lifespan)
     app.state.secure_cookies = origin.scheme == "https"
-    app.state.photos = settings.data_dir.resolve() / "photos"
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[origin.hostname])
+    app.state.worker_token = settings.worker_token
+    root = settings.data_dir.resolve()
+    app.state.photos = root / "photos"
+    app.state.staging = root / "staging"
+    app.state.artifacts = root / "artifacts"
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[origin.hostname, "127.0.0.1", "localhost"])
 
     @app.middleware("http")
     async def browser_origin(request: Request, call_next):
@@ -80,4 +86,6 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
     app.include_router(scenes.router)
     app.include_router(frames.router)
     app.include_router(revisions.router)
+    app.include_router(jobs.router)
+    app.include_router(workers.router)
     return app

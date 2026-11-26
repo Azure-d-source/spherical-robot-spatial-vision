@@ -1,36 +1,25 @@
-import hashlib
 import json
 import logging
 import os
 import secrets
 import shutil
-import struct
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
-from PIL import Image
-from pydantic import BaseModel, Field
 
-from ..workers.point_cloud import count_points
-from ..workers.registration import ExecutionError, SPLAT_RECIPES, registration_coverage, verify_recipe
+from ..workers.registration import ExecutionError
 from .images import photo_path
-from .models import Job, JobKind, RegistrationCoverage
+from .job_artifacts import ARTIFACT_TYPES, prepare_result
+from .models import Job
 from .store import Storage, job_record
+from .worker_protocol import ERRORS, LEASE, MAX_ATTEMPTS, ClaimInput, FailureInput, LeaseInput, token_hash
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-LEASE = timedelta(seconds=60)
-MAX_ATTEMPTS = 3
-ARTIFACT_TYPES = {
-    "scene.ply": "application/octet-stream",
-    "scene.sog": "application/octet-stream",
-    "scene.glb": "model/gltf-binary",
-    "manifest.json": "application/json",
-}
 
 
 def worker_access(request: Request, x_worker_token: str | None = Header(default=None)):
@@ -42,36 +31,11 @@ def worker_access(request: Request, x_worker_token: str | None = Header(default=
         raise HTTPException(401, "远程 Worker 需要凭据")
 
 
-class LeaseInput(BaseModel):
-    lease_token: str
-
-
-class FailureInput(LeaseInput):
-    error_code: str = Field(pattern=r"^[A-Z_]+$", max_length=64)
-    error_message: str | None = Field(default=None, max_length=500, min_length=1)
-    coverage: RegistrationCoverage | None = None
-
-
-class ClaimInput(BaseModel):
-    kinds: list[JobKind] = Field(default_factory=lambda: ["splat"], min_length=1, max_length=3)
-
-
-ERRORS = {
-    "INSUFFICIENT_REGISTRATION": "没有可用的配准组件。请补拍清晰、有重叠和位移的机位。",
-    "RESOLUTION_MISMATCH": "校正方向后照片画幅不一致。请统一拍摄方向与画幅。",
-    "EXECUTOR_ERROR": "作业执行失败，请查看 Worker 日志。",
-}
-
-
 def load_job(db, job_id):
     row = db.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "未找到该作业")
     return row
-
-
-def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def same_token(row, token):
@@ -163,95 +127,6 @@ def fail_execution(job_id: str, payload: FailureInput, storage: Storage):
                     or len(missing) != len(coverage.unregistered_frame_ids) or not missing.issubset(ids)):
                 raise HTTPException(422, "失败报告的配准统计与输入批次不匹配")
         fail_job(db, job_id, code, payload.error_message or ERRORS[code], coverage.model_dump() if coverage else None)
-
-
-def read_manifest(output):
-    try:
-        path = output / "manifest.json"
-        if path.is_symlink() or path.stat().st_size > 2 * 1024 * 1024:
-            raise ValueError("Unexpected manifest")
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise ExecutionError("INVALID_ARTIFACT", "无法读取作业清单。") from error
-    if not isinstance(manifest, dict):
-        raise ExecutionError("INVALID_ARTIFACT", "作业清单格式无效。")
-    return manifest
-
-
-def stage_splat(output, snapshot, manifest, frames, recipe):
-    frame_ids = [frame["frame_id"] for frame in frames]
-    coverage = registration_coverage(manifest, frame_ids)
-    verify_recipe(recipe, coverage)
-    names = ["scene.ply"]
-    if (output / "scene.sog").is_file():
-        names.append("scene.sog")
-    for name in names:
-        path = output / name
-        if path.is_symlink() or not path.is_file() or not path.stat().st_size:
-            raise ExecutionError("INVALID_ARTIFACT", f"重建产物缺失或无效。{name}")
-        shutil.copyfile(path, snapshot / name)
-    return {"registration": coverage}, [{"filename": name} for name in names], {
-        "registration": coverage, "seconds_by_stage": manifest.get("seconds_by_stage", {}),
-        "viewer_camera": manifest["colmap"].get("viewer_camera"),
-    }
-
-
-def stage_points(output, snapshot, manifest, frames):
-    glb = output / "scene.glb"
-    files = [{"filename": glb.name}]
-    try:
-        result = manifest["result"]
-        inputs = manifest["frames"]
-        if glb.is_symlink() or len(inputs) != len(frames):
-            raise ValueError("Unexpected GLB or manifest frame count")
-        points = count_points(glb)
-        if points <= 0 or result["point_count"] != points or result["point_cloud"] != glb.name:
-            raise ValueError("Point count or filename mismatch")
-        shutil.copyfile(glb, snapshot / glb.name)
-        for index, (frame, entry) in enumerate(zip(frames, inputs, strict=True)):
-            relative = f"depth_vis/{index:04d}.jpg"
-            if entry["depth_preview"] != relative:
-                raise ValueError("Unexpected depth preview path")
-            source = output / relative
-            if source.resolve() != source:
-                raise ValueError("Unexpected depth preview link")
-            with Image.open(source, formats=("JPEG",)) as preview:
-                preview.load()
-            filename = f"depth-{index:04d}.jpg"
-            shutil.copyfile(source, snapshot / filename)
-            files.append({"filename": filename, "frame_id": frame["frame_id"]})
-    except (OSError, KeyError, TypeError, ValueError, struct.error) as error:
-        raise ExecutionError("INVALID_ARTIFACT", "点云或深度预览未通过发布校验。") from error
-    return {}, files, {
-        "model": manifest.get("model"), "runtime": manifest.get("runtime"),
-        "parameters": manifest.get("parameters"), "result": result,
-    }
-
-
-def prepare_result(output, snapshot, frames, row):
-    manifest = read_manifest(output)
-    if row["kind"] == "splat":
-        if row["recipe_version"] not in SPLAT_RECIPES:
-            raise ExecutionError("UNKNOWN_RECIPE", "3DGS 配方版本不可用。")
-        fields, files, metadata = stage_splat(output, snapshot, manifest, frames, row["recipe_version"])
-    else:
-        fields, files, metadata = stage_points(output, snapshot, manifest, frames)
-
-    for file in files:
-        file["size_bytes"] = (snapshot / file["filename"]).stat().st_size
-    public_manifest = {
-        "job_id": row["job_id"], "revision_id": row["revision_id"],
-        "recipe_version": row["recipe_version"], "kind": row["kind"],
-        "frames": [{"frame_id": frame["frame_id"], "sha256": frame["sha256"]} for frame in frames],
-        **metadata,
-        "artifacts": files,
-    }
-    published_manifest = snapshot / "manifest.json"
-    published_manifest.write_text(json.dumps(public_manifest, indent=2), encoding="utf-8")
-    files.append({"filename": published_manifest.name, "size_bytes": published_manifest.stat().st_size})
-    return {**fields, "artifacts": [
-        {**file, "url": f"/api/artifacts/{row['job_id']}/{file['filename']}"} for file in files
-    ]}
 
 
 @router.post("/api/internal/jobs/{job_id}/complete", response_model=Job, dependencies=[Depends(worker_access)])
