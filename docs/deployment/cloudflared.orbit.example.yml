@@ -2,11 +2,11 @@ tunnel: "<TUNNEL_UUID>"
 credentials-file: 'C:/Users/<WINDOWS_USER>/.cloudflared/<TUNNEL_UUID>.json'
 
 ingress:
-  - hostname: orbit.alvenric.com
+  - hostname: orbit.example.com
     path: '^/api/internal(/|$)'
     service: http_status:404
-  - hostname: orbit.alvenric.com
+  - hostname: orbit.example.com
     service: http://127.0.0.1:8000
     originRequest:
-      httpHostHeader: orbit.alvenric.com
+      httpHostHeader: orbit.example.com
   - service: http_status:404

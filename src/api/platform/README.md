@@ -86,16 +86,16 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 
 ## Windows 同机部署与 Cloudflare Tunnel
 
-本机 4060 同时运行工作台、PostgreSQL 和 GPU Worker。公网入口为 `https://orbit.alvenric.com`。Cloudflare 在边缘提供 HTTPS，`cloudflared` 将流量转发到本机 `127.0.0.1:8000`。API 和 Worker 共享同一个数据目录及 Worker 令牌。
+本机 4060 同时运行工作台、PostgreSQL 和 GPU Worker。下文用 `https://orbit.example.com` 作为公网入口示例。Cloudflare 在边缘提供 HTTPS，`cloudflared` 将流量转发到本机 `127.0.0.1:8000`。API 和 Worker 共享同一个数据目录及 Worker 令牌。
 
 ### 启动 API 和 Worker
 
-按上面的步骤安装依赖、迁移数据库、创建内测账号并构建前端。以下命令在仓库根目录的同一个 PowerShell 执行，沿用该终端中的 `SPATIAL_DATABASE_URL` 和 GPU 环境变量。为公网内测指定独立的数据目录。每次完整启动可以生成一个新 Worker 令牌，单独重启某个进程时沿用另一进程正在使用的令牌。
+按上面的步骤安装依赖、迁移数据库、创建内测账号并构建前端。以下命令在仓库根目录的同一个 PowerShell 执行，沿用该终端中的 `SPATIAL_DATABASE_URL` 和 GPU 环境变量。执行前将 `orbit.example.com` 换成实际子域名，将 `<SPATIAL_DATA_DIR>` 换成本机为内测准备的数据目录。每次完整启动可以生成一个新 Worker 令牌，单独重启某个进程时沿用另一进程正在使用的令牌。
 
 ```powershell
 $py = (Resolve-Path '.\.venv\Scripts\python.exe').Path
-$env:SPATIAL_PUBLIC_ORIGIN = 'https://orbit.alvenric.com'
-$env:SPATIAL_DATA_DIR = 'D:\orbitforge-pilot\runtime'
+$env:SPATIAL_PUBLIC_ORIGIN = 'https://orbit.example.com'
+$env:SPATIAL_DATA_DIR = '<SPATIAL_DATA_DIR>'
 $env:SPATIAL_WORKER_TOKEN = (& $py -c 'import secrets; print(secrets.token_urlsafe(32))').Trim()
 
 $apiProcess = Start-Process -FilePath $py -ArgumentList @(
@@ -126,31 +126,31 @@ Copy-Item -LiteralPath 'docs/deployment/cloudflared.orbit.example.yml' -Destinat
 notepad $cfg
 ```
 
-在 [Tunnel 配置模板](../../../docs/deployment/cloudflared.orbit.example.yml) 的本机副本里填入 UUID，以及 `tunnel create` 返回的 JSON 凭据路径。优先拦截 `/api/internal/`，其余 `orbit.alvenric.com` 请求转发到回环 HTTP，并将 origin Host 明确设为 `orbit.alvenric.com`。`cert.pem` 与 Tunnel 凭据 JSON 保留在本机。 [Ingress 规则](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/configuration-file/) · [Origin Host 配置](https://developers.cloudflare.com/tunnel/reference/origin-parameters/)
+在 [Tunnel 配置模板](../../../docs/deployment/cloudflared.orbit.example.yml) 的本机副本里填入 UUID、`tunnel create` 返回的 JSON 凭据路径和实际子域名。优先拦截 `/api/internal/`，其余发往示例子域 `orbit.example.com` 的请求转发到回环 HTTP，并将 origin Host 设为同一个子域。`cert.pem` 与 Tunnel 凭据 JSON 保留在本机。 [Ingress 规则](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/configuration-file/) · [Origin Host 配置](https://developers.cloudflare.com/tunnel/reference/origin-parameters/)
 
 ```powershell
 & $cf tunnel --config $cfg ingress validate
-& $cf tunnel --config $cfg ingress rule 'https://orbit.alvenric.com/api/internal/workers/claim'
-& $cf tunnel --config $cfg ingress rule 'https://orbit.alvenric.com/api/health'
+& $cf tunnel --config $cfg ingress rule 'https://orbit.example.com/api/internal/workers/claim'
+& $cf tunnel --config $cfg ingress rule 'https://orbit.example.com/api/health'
 # 确认 orbit 记录可用于本项目后，仅在尚无该记录时执行
-& $cf tunnel route dns orbitforge-pilot orbit.alvenric.com
+& $cf tunnel route dns orbitforge-pilot orbit.example.com
 & $cf tunnel --config $cfg run orbitforge-pilot
 ```
 
 `orbit` 已有 DNS 记录时，先在 Cloudflare 控制台核对它关联的应用和目标。如果确认应切换到本项目，将该子域的代理 CNAME 指向 `<TUNNEL_UUID>.cfargotunnel.com`。 [Tunnel DNS 路由](https://developers.cloudflare.com/tunnel/concepts/routing/)
 
-- 在 Cloudflare 建立仅匹配 `http.host eq "orbit.alvenric.com" and not ssl` 的 Single Redirect。目标表达式为 `concat("https://orbit.alvenric.com", http.request.uri.path)`，状态 `308`，启用保留查询字符串。HTTP 跳转在边缘完成，同机 Worker 继续使用回环 HTTP。 [重定向规则](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/settings/)
+- 在 Cloudflare 建立仅匹配 `http.host eq "orbit.example.com" and not ssl` 的 Single Redirect。目标表达式为 `concat("https://orbit.example.com", http.request.uri.path)`，状态 `308`，启用保留查询字符串。HTTP 跳转在边缘完成，同机 Worker 继续使用回环 HTTP。 [重定向规则](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/settings/)
 - 登录、原图和模型接口带 `Cache-Control: no-store`。对该子域的 `/api/` 前缀设 Cache Rule 为 Bypass cache，确保现有缓存规则不会缓存受会话保护的响应。上传按每张图一个请求，应用限制图片为 12 MiB，整个 multipart 请求为 12 MiB 加 64 KiB。Cloudflare 的有效上传限额至少要容纳该请求。 [Cache Rules](https://developers.cloudflare.com/cache/how-to/cache-rules/settings/) · [Cloudflare 上传限制](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/4xx-client-error/error-413/)
 
 ### 跨网验收清单
 
-- [ ] 从校园 Wi-Fi 和手机热点分别访问 `http://orbit.alvenric.com/?probe=1`，确认跳转保留查询参数。直接打开 HTTPS，浏览器证书正常，`/api/health` 返回 `{"status":"ok","workbench":"team"}`。公网 `/api/internal/workers/claim` 返回 `404`。
+- [ ] 将 `http://orbit.example.com/?probe=1` 换成实际子域地址，从校园 Wi-Fi 和手机热点分别访问，确认跳转保留查询参数。直接打开 HTTPS，浏览器证书正常，`/api/health` 返回 `{"status":"ok","workbench":"team"}`。公网 `/api/internal/workers/claim` 返回 `404`。
 - [ ] 两端分别用独立同队账号登录。在 Edge 开发者工具确认 `orbitforge_session` 为 Secure、HttpOnly、SameSite=Strict。刷新后仍可访问，退出后 `/api/auth/me` 返回 `401`。
 - [ ] 使用公开样例，两人依顺序各上传 16 张，按照下节完成四图点云及 `public-32-v1` 重建。单张超 12 MiB 的文件在工作台应提示超限。用登录后的接口检查时，预期收到 `413` 与 `PHOTO_LIMIT_EXCEEDED`。
 - [ ] 浏览器网络面板确认 `/supersplat/zstd-decoder.wasm` 返回 `application/wasm`。已登录下载 `scene.sog` 返回 `application/octet-stream` 与 `Cache-Control: no-store`，内嵌模型可旋转。退出后重新请求同一 SOG 直链返回 `401`，隔离团队账号返回 `404`。
 - [ ] 校园 Wi-Fi 与手机热点均可回看原图、批次和模型。归档后同队可回看。记录上传耗时、模型可见时间、32 图注册数以及 GLB、PLY 和 SOG 的文件大小。
 
-2026 年 11 月 26 日，使用 `cloudflared 2026.11.2` 验证了模板格式及路由命中。本机 HTTPS 代理到 8000 端口的验收通过，包括会话 Cookie、Worker 令牌、上传大小边界、WASM 和 SOG 的范围请求、SOG 禁止缓存及下载权限。公网探针访问 `https://orbit.alvenric.com/api/health` 时收到 Cloudflare 的 404，HTTP 首页也未跳转。真实 Tunnel 接通和两网验收待确认该子域的现有 DNS 用途后进行。
+2026 年 11 月 26 日，使用 `cloudflared 2026.11.2` 验证了模板格式及路由命中。本机 HTTPS 代理到 8000 端口的验收通过，包括会话 Cookie、Worker 令牌、上传大小边界、WASM 和 SOG 的范围请求、SOG 禁止缓存及下载权限。测试时，实际子域的公网 `/api/health` 返回 Cloudflare 的 404，HTTP 首页也未跳转。真实 Tunnel 接通和两网验收待确认该子域的现有 DNS 用途后进行。
 
 ## 异地内测首轮
 

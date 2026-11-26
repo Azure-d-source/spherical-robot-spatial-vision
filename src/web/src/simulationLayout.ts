@@ -2,7 +2,8 @@ export const initialLayout = { x: 0, z: 0, rotation: 0 }
 export type SimulationLayout = typeof initialLayout
 
 export function layoutKey({ x, z, rotation }: SimulationLayout) {
-  return `sim-v1:${Math.round(x * 100)},${Math.round(z * 100)},${rotation === -180 ? 180 : rotation}`
+  const roundedRotation = Math.round(rotation)
+  return `sim-v1:${Math.round(x * 100)},${Math.round(z * 100)},${roundedRotation === -180 ? 180 : roundedRotation}`
 }
 
 export function frameLayout(label: string) {
