@@ -1,12 +1,12 @@
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-from src.api.platform import scenes
+from src.api.platform import frames
 from src.api.platform.config import PlatformSettings
 
 
 database_url = PlatformSettings.from_env().database_url
-metadata = scenes.Base.metadata
+metadata = frames.Base.metadata
 
 if context.is_offline_mode():
     context.configure(url=database_url, target_metadata=metadata, literal_binds=True)

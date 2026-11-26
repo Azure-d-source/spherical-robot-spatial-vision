@@ -1,6 +1,6 @@
 # 后端第一段联调
 
-此入口用于联调 PostgreSQL、账号会话与团队场景。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
+此入口用于联调 PostgreSQL、账号会话、团队场景和照片采集。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
 
 ## 启动与数据库迁移
 
@@ -18,6 +18,8 @@ $env:SPATIAL_DATABASE_URL = 'postgresql+psycopg://user:password@127.0.0.1:5432/o
 
 打开 [接口文档](http://127.0.0.1:8001/docs)，先登录，再创建和查看场景。账号密码通过终端提示输入。异地内测时，将 `SPATIAL_PUBLIC_ORIGIN` 设为工作台的 HTTPS 源地址，例如 `https://workbench.example.com`。HTTPS 模式会为会话 Cookie 启用 Secure，反向代理应保留该站点的 Host。原有采集、批次和 GPU 演示可继续通过 [工作台原入口](../../README.md#本地启动工作台) 验证。
 
+PostgreSQL 入口默认把原图写入 `data/platform-runtime/photos`。可以用 `SPATIAL_DATA_DIR` 指定独立的运行目录。每个数据库使用自己的目录，同一数据库的 API 和 Worker 使用同一目录。
+
 | 接口 | 当前契约 |
 | --- | --- |
 | `POST /api/auth/login` | 接收 `email`、`password`，返回身份和团队，设置会话 Cookie。 |
@@ -25,8 +27,14 @@ $env:SPATIAL_DATABASE_URL = 'postgresql+psycopg://user:password@127.0.0.1:5432/o
 | `POST /api/auth/logout` | 注销当前会话，返回 `204`。 |
 | `POST /api/scenes` | 接收已有的 `title`、`source` 和可选 `target`。从会话确定团队及创建者，返回 `201`。 |
 | `GET /api/scenes`、`GET /api/scenes/{scene_id}` | 只返回当前团队内的场景。跨团队详情请求返回 `404`。 |
+| `POST /api/scenes/{scene_id}/frames` | 表单包含 `image`、`capture_id`，可选 `view_label`、带时区的 `captured_at`。新照片返回 `201`，复用照片返回 `200`。 |
+| `GET /api/scenes/{scene_id}/frames` | 按上传顺序返回去重后的照片及原图地址。 |
+| `GET /api/scenes/{scene_id}/frames/{frame_id}/uploads` | 返回谁上传了同一张照片，含各自的采集编号、机位和时间。 |
+| `GET /api/frames/{frame_id}/image` | 登录后按照片所属场景校验团队权限，并返回原图。 |
 
 声明的业务错误用 `code` 和 `message`，请求校验失败额外返回 `fields`。会话令牌在客户端以 HttpOnly Cookie 保存，数据库存令牌哈希和过期时间。
+
+同一场景内，照片按文件内容合并，照片列表保留首次上传的原图信息。每位成员有自己的上传记录。同一成员用同一个 `capture_id` 重传相同内容时复用原记录，换成不同内容会返回 `409 CAPTURE_CONFLICT`。其他成员即使用了同一个编号，也能留下自己的上传记录。上传支持静态 JPEG、PNG 和 WebP，每张最多 12 MiB、2400 万像素。
 
 ## 验收
 

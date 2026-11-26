@@ -4,7 +4,7 @@ from uuid import uuid4
 from fastapi import APIRouter
 from pydantic import ConfigDict, field_serializer
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from ..models import Scene as SceneResponse
 from ..models import SceneInput, SceneSource
@@ -43,6 +43,14 @@ class TeamScene(SceneResponse):
         return value.astimezone(timezone.utc)
 
 
+def require_scene(db: Session, team_id: str, scene_id: str, *, for_update: bool = False) -> Scene:
+    query = select(Scene).where(Scene.scene_id == scene_id, Scene.team_id == team_id)
+    scene = db.scalar(query.with_for_update() if for_update else query)
+    if scene is None:
+        raise ApiError(404, "SCENE_NOT_FOUND", "未找到场景。")
+    return scene
+
+
 @router.get("", response_model=list[TeamScene], responses=UNAUTHENTICATED)
 def list_scenes(account: CurrentAccount, db: Database) -> list[Scene]:
     query = select(Scene).where(Scene.team_id == account.team_id).order_by(Scene.created_at.desc(), Scene.scene_id.desc())
@@ -64,7 +72,4 @@ def create_scene(payload: SceneInput, account: CurrentAccount, db: Database) -> 
 @router.get("/{scene_id}", response_model=TeamScene,
             responses={**UNAUTHENTICATED, 404: {"model": ErrorResponse}})
 def get_scene(scene_id: str, account: CurrentAccount, db: Database) -> Scene:
-    scene = db.scalar(select(Scene).where(Scene.scene_id == scene_id, Scene.team_id == account.team_id))
-    if scene is None:
-        raise ApiError(404, "SCENE_NOT_FOUND", "未找到场景。")
-    return scene
+    return require_scene(db, account.team_id, scene_id)

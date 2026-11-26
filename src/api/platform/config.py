@@ -1,14 +1,20 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from sqlalchemy.engine import make_url
+
+from ..settings import ROOT
+
+DEFAULT_DATA_DIR = ROOT / "data" / "platform-runtime"
 
 
 @dataclass(frozen=True)
 class PlatformSettings:
     database_url: str
     public_origin: str = "http://127.0.0.1:8001"
+    data_dir: Path = DEFAULT_DATA_DIR
 
     def __post_init__(self):
         if make_url(self.database_url).drivername != "postgresql+psycopg":
@@ -29,4 +35,5 @@ class PlatformSettings:
         return cls(
             database_url=database_url,
             public_origin=os.environ.get("SPATIAL_PUBLIC_ORIGIN", "http://127.0.0.1:8001"),
+            data_dir=Path(os.environ.get("SPATIAL_DATA_DIR", DEFAULT_DATA_DIR)),
         )

@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import accounts, scenes
+from . import accounts, frames, scenes
 from .config import PlatformSettings
 from .database import Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
@@ -24,7 +24,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         engine = create_engine(settings.database_url, pool_pre_ping=True)
         try:
             with engine.connect() as connection:
-                connection.execute(select(accounts.Team.team_id).limit(1))
+                connection.execute(select(frames.Frame.frame_id).limit(1))
         except BaseException:
             engine.dispose()
             raise
@@ -35,12 +35,14 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         engine = await run_in_threadpool(open_database)
         app.state.sessions = sessionmaker(engine, expire_on_commit=False)
         try:
+            await run_in_threadpool(app.state.photos.mkdir, parents=True, exist_ok=True)
             yield
         finally:
             await run_in_threadpool(engine.dispose)
 
     app = FastAPI(title="OrbitForge API", version="0.2.0", lifespan=lifespan)
     app.state.secure_cookies = origin.scheme == "https"
+    app.state.photos = settings.data_dir.resolve() / "photos"
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[origin.hostname])
 
     @app.middleware("http")
@@ -50,6 +52,9 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
             error = ErrorResponse(code="ORIGIN_FORBIDDEN", message="请求必须来自工作台地址。")
             return JSONResponse(status_code=403, content=error.model_dump())
         response = await call_next(request)
+        if response.status_code == 413 and response.headers.get("content-type", "").startswith("text/plain"):
+            error = ErrorResponse(code="PHOTO_LIMIT_EXCEEDED", message="上传请求超过照片大小限制。")
+            response = JSONResponse(status_code=413, content=error.model_dump())
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
@@ -73,4 +78,5 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
 
     app.include_router(accounts.router)
     app.include_router(scenes.router)
+    app.include_router(frames.router)
     return app
