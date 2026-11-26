@@ -52,6 +52,7 @@ class PlatformApiTests(unittest.TestCase):
         self.addCleanup(self.engine.dispose)
 
         self.owner = uuid4().hex
+        self.member = uuid4().hex
         self.team = uuid4().hex
         other_team = uuid4().hex
         self.password = uuid4().hex
@@ -62,7 +63,9 @@ class PlatformApiTests(unittest.TestCase):
             db.add_all([
                 Account(account_id=self.owner, email="owner@example.test", team_id=self.team,
                         role="admin", password_hash=credential),
-                Account(account_id=uuid4().hex, email="member@example.test", team_id=self.team,
+                Account(account_id=self.member, email="member@example.test", team_id=self.team,
+                        role="member", password_hash=credential),
+                Account(account_id=uuid4().hex, email="colleague@example.test", team_id=self.team,
                         role="member", password_hash=credential),
                 Account(account_id=uuid4().hex, email="outsider@example.test", team_id=other_team,
                         role="member", password_hash=credential),
@@ -231,3 +234,128 @@ class PlatformApiTests(unittest.TestCase):
             self.assertEqual(accepted.status_code, 201)
             history = client.get(scene + f"/frames/{accepted.json()['frame_id']}/uploads").json()
             self.assertEqual(len(history), 1)
+
+    def test_frozen_batches_keep_order_identity_and_originals(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url=ORIGIN) as owner:
+            self.logged_in(owner, "owner@example.test")
+            member = TestClient(app, base_url=ORIGIN)
+            self.addCleanup(member.close)
+            self.logged_in(member, "member@example.test")
+            scene = self.create_scene(owner)
+            frames = [self.upload(member, scene, self.photo(color), color).json() for color in ("red", "blue")]
+            selected = [item["frame_id"] for item in reversed(frames)]
+            path = scene + "/revisions"
+            created = member.post(path, json={"frame_ids": selected})
+            self.assertEqual(created.status_code, 201, created.text)
+            revision = created.json()
+            self.assertEqual((revision["version"], revision["creator_id"], revision["frame_ids"]),
+                             (1, self.member, selected))
+            repeat = owner.post(path, json={"frame_ids": selected})
+            self.assertEqual((repeat.status_code, repeat.json()), (200, revision))
+            reordered = owner.post(path, json={"frame_ids": selected[::-1]})
+            self.assertEqual(reordered.status_code, 201)
+            self.assertEqual(reordered.json()["version"], 2)
+            self.assertEqual(owner.get(path).json(), [reordered.json(), revision])
+            self.assertEqual(owner.get(path + "/" + revision["revision_id"]).json(), revision)
+
+            other_scene = self.create_scene(owner)
+            foreign_id = self.upload(owner, other_scene, self.photo(), "other").json()["frame_id"]
+            bad = owner.post(path, json={"frame_ids": [selected[0], foreign_id]})
+            self.assertEqual((bad.status_code, bad.json()["code"]), (422, "FRAME_OUTSIDE_SCENE"))
+            repeated = owner.post(path, json={"frame_ids": [selected[0], selected[0]]})
+            self.assertEqual((repeated.status_code, repeated.json()["code"]), (422, "INVALID_FRAME_IDS"))
+            obsolete = owner.post(path, json={"frame_ids": ["0" * 32]})
+            self.assertEqual(obsolete.status_code, 422)
+            mixed = self.create_scene(owner)
+            mixed_frames = [
+                self.upload(owner, mixed, self.photo(color), color, view_label=label).json()["frame_id"]
+                for color, label in (("red", "[sim-v1:0,0,0] 正面"), ("blue", "[sim-v1:20,0,0] 正面"))
+            ]
+            mixed_reply = owner.post(mixed + "/revisions", json={"frame_ids": mixed_frames})
+            self.assertEqual((mixed_reply.status_code, mixed_reply.json()["code"]), (422, "MIXED_LAYOUTS"))
+
+            used = member.delete(scene + "/frames/" + selected[0])
+            self.assertEqual((used.status_code, used.json()["code"]), (409, "FRAME_IN_USE"))
+            self.assertEqual(owner.get(frames[1]["image_url"]).content, self.photo())
+            self.assertEqual(owner.get(path + "/" + revision["revision_id"]).json(), revision)
+
+            outsider = TestClient(app, base_url=ORIGIN)
+            self.addCleanup(outsider.close)
+            self.logged_in(outsider, "outsider@example.test")
+            self.assertEqual(outsider.get(path).status_code, 404)
+            self.assertEqual(outsider.get(path + "/" + revision["revision_id"]).status_code, 404)
+            self.assertEqual(outsider.delete(scene + "/frames/" + selected[0]).status_code, 404)
+
+    def test_only_first_uploader_owner_or_admin_can_withdraw(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url=ORIGIN) as admin:
+            self.logged_in(admin, "owner@example.test")
+            member = TestClient(app, base_url=ORIGIN)
+            colleague = TestClient(app, base_url=ORIGIN)
+            self.addCleanup(member.close)
+            self.addCleanup(colleague.close)
+            self.logged_in(member, "member@example.test")
+            self.logged_in(colleague, "colleague@example.test")
+            scene = self.create_scene(admin)
+            raw = self.photo()
+            frame = self.upload(member, scene, raw).json()
+            self.assertEqual(self.upload(colleague, scene, raw).status_code, 200)
+            path = scene + "/frames/" + frame["frame_id"]
+            forbidden = colleague.delete(path)
+            self.assertEqual((forbidden.status_code, forbidden.json()["code"]), (403, "FRAME_WITHDRAW_FORBIDDEN"))
+            self.assertEqual(member.delete(path).status_code, 204)
+            self.assertEqual(member.delete(path).status_code, 204)
+            self.assertEqual(admin.get(scene + "/frames").json(), [])
+            self.assertEqual(admin.get(frame["image_url"]).status_code, 404)
+            self.assertEqual(len(admin.get(path + "/uploads").json()), 2)
+            blocked = admin.post(scene + "/revisions", json={"frame_ids": [frame["frame_id"]]})
+            self.assertEqual((blocked.status_code, blocked.json()["code"]), (409, "FRAME_WITHDRAWN"))
+
+            old = self.upload(member, scene, raw)
+            self.assertEqual((old.status_code, old.json()["status"], old.json()["withdrawn_by"]),
+                             (200, "withdrawn", self.member))
+            self.assertEqual(old.json()["frame_id"], frame["frame_id"])
+            accepted = self.upload(member, scene, raw, "new")
+            self.assertEqual((accepted.status_code, accepted.json()["status"]), (201, "active"))
+            self.assertNotEqual(accepted.json()["frame_id"], frame["frame_id"])
+            self.assertEqual(admin.get(scene + "/frames").json(), [accepted.json()])
+            self.assertEqual(len(list(app.state.photos.iterdir())), 1)
+            self.assertEqual(admin.delete(scene + "/frames/" + accepted.json()["frame_id"]).status_code, 204)
+
+            member_owned = self.create_scene(member)
+            other_frame = self.upload(colleague, member_owned, raw).json()
+            self.assertEqual(member.delete(member_owned + "/frames/" + other_frame["frame_id"]).status_code, 204)
+
+    def test_freeze_and_withdraw_cannot_both_succeed(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url=ORIGIN) as owner:
+            self.logged_in(owner, "owner@example.test")
+            member = TestClient(app, base_url=ORIGIN)
+            self.addCleanup(member.close)
+            self.logged_in(member, "member@example.test")
+            scene = self.create_scene(owner)
+            frame = self.upload(member, scene, self.photo()).json()
+            frame_id = frame["frame_id"]
+            ready = Barrier(2, timeout=8)
+
+            def freeze():
+                ready.wait()
+                return owner.post(scene + "/revisions", json={"frame_ids": [frame_id]})
+
+            def withdraw():
+                ready.wait()
+                return member.delete(scene + "/frames/" + frame_id)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                freezing, withdrawing = pool.submit(freeze), pool.submit(withdraw)
+                frozen, withdrawn = freezing.result(timeout=15), withdrawing.result(timeout=15)
+            if frozen.status_code == 201:
+                self.assertEqual((withdrawn.status_code, withdrawn.json()["code"]), (409, "FRAME_IN_USE"))
+                self.assertEqual(owner.get(scene + "/revisions").json()[0]["frame_ids"], [frame_id])
+                self.assertEqual(member.get(frame["image_url"]).status_code, 200)
+            else:
+                self.assertEqual(withdrawn.status_code, 204)
+                self.assertEqual((frozen.status_code, frozen.json()["code"]), (409, "FRAME_WITHDRAWN"))
+                self.assertEqual(owner.get(scene + "/revisions").json(), [])
+                self.assertEqual(owner.get(scene + "/frames").json(), [])

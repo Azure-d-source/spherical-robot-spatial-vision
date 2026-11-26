@@ -1,6 +1,6 @@
 # 后端第一段联调
 
-此入口用于联调 PostgreSQL、账号会话、团队场景和照片采集。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
+此入口用于联调 PostgreSQL、账号会话、团队场景、照片采集和冻结批次。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
 
 ## 启动与数据库迁移
 
@@ -31,10 +31,17 @@ PostgreSQL 入口默认把原图写入 `data/platform-runtime/photos`。可以�
 | `GET /api/scenes/{scene_id}/frames` | 按上传顺序返回去重后的照片及原图地址。 |
 | `GET /api/scenes/{scene_id}/frames/{frame_id}/uploads` | 返回谁上传了同一张照片，含各自的采集编号、机位和时间。 |
 | `GET /api/frames/{frame_id}/image` | 登录后按照片所属场景校验团队权限，并返回原图。 |
+| `DELETE /api/scenes/{scene_id}/frames/{frame_id}` | 首次上传者、场景创建者或管理员可撤下未用于批次的照片。成功和重复撤下均返回 `204`。已用于批次时返回 `409 FRAME_IN_USE`。 |
+| `POST /api/scenes/{scene_id}/revisions` | 提交有序的 `frame_ids`，新建返回 `201`，完全相同的清单复用时返回 `200`。照片已撤下时返回 `409 FRAME_WITHDRAWN`。 |
+| `GET /api/scenes/{scene_id}/revisions`、`GET /api/scenes/{scene_id}/revisions/{revision_id}` | 返回批次版本、创建者以及冻结时的照片顺序。 |
 
 声明的业务错误用 `code` 和 `message`，请求校验失败额外返回 `fields`。会话令牌在客户端以 HttpOnly Cookie 保存，数据库存令牌哈希和过期时间。
 
 同一场景内，照片按文件内容合并，照片列表保留首次上传的原图信息。每位成员有自己的上传记录。同一成员用同一个 `capture_id` 重传相同内容时复用原记录，换成不同内容会返回 `409 CAPTURE_CONFLICT`。其他成员即使用了同一个编号，也能留下自己的上传记录。上传支持静态 JPEG、PNG 和 WebP，每张最多 12 MiB、2400 万像素。
+
+撤下后，照片从常规列表和原图入口移出，数据库保留操作人与时间、上传历史及原文件。旧采集编号的重试会返回照片的撤下状态。用户明确用新编号重新上传相同文件时，产生一条新的可选照片记录，磁盘复用原文件。
+
+批次按场景从第 1 版编号。修改选图顺序或补拍后确认，会形成新批次。不同场景的照片和不同仿真布局的照片不能混入同一批次。撤下与冻结在同一事务约束下校验，先完成的操作决定后续结果。
 
 ## 验收
 

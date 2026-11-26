@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import accounts, frames, scenes
+from . import accounts, frames, revisions, scenes
 from .config import PlatformSettings
 from .database import Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
@@ -24,7 +24,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         engine = create_engine(settings.database_url, pool_pre_ping=True)
         try:
             with engine.connect() as connection:
-                connection.execute(select(frames.Frame.frame_id).limit(1))
+                connection.execute(select(revisions.RevisionFrame.frame_id).limit(1))
         except BaseException:
             engine.dispose()
             raise
@@ -79,4 +79,5 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
     app.include_router(accounts.router)
     app.include_router(scenes.router)
     app.include_router(frames.router)
+    app.include_router(revisions.router)
     return app

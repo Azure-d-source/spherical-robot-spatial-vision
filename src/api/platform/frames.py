@@ -1,13 +1,16 @@
 import logging
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import AwareDatetime, BaseModel, ConfigDict, field_serializer
-from sqlalchemy import BigInteger, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, UniqueConstraint, func, select
+from sqlalchemy import (
+    BigInteger, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint,
+    Index, String, UniqueConstraint, func, select, text,
+)
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -16,6 +19,7 @@ from ..models import Frame as FrameResponse
 from .accounts import CurrentAccount, UNAUTHENTICATED
 from .database import Base, Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
+from .revision_models import RevisionFrame
 from .scenes import Scene, require_scene
 
 router = APIRouter(prefix="/api", tags=["照片"])
@@ -26,9 +30,11 @@ PHOTO_ACCESS_ERRORS = {**UNAUTHENTICATED, 404: {"model": ErrorResponse}}
 class Frame(Base):
     __tablename__ = "frames"
     __table_args__ = (
-        UniqueConstraint("scene_id", "sha256", name="uq_frames_scene_hash"),
         UniqueConstraint("scene_id", "frame_id", name="uq_frames_scene_frame"),
+        Index("uq_frames_scene_active_hash", "scene_id", "sha256", unique=True,
+              postgresql_where=text("withdrawn_at IS NULL")),
         Index("ix_frames_scene_created", "scene_id", "created_at", "frame_id"),
+        CheckConstraint("(withdrawn_at IS NULL) = (withdrawn_by IS NULL)", name="ck_frames_withdrawal"),
     )
 
     frame_id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -44,10 +50,16 @@ class Frame(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     width: Mapped[int]
     height: Mapped[int]
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_by: Mapped[str | None] = mapped_column(ForeignKey("accounts.account_id", name="fk_frames_withdrawn_by"))
 
     @property
     def image_url(self) -> str:
         return f"/api/frames/{self.frame_id}/image"
+
+    @property
+    def status(self) -> Literal["active", "withdrawn"]:
+        return "withdrawn" if self.withdrawn_at is not None else "active"
 
 
 class FrameUpload(Base):
@@ -72,10 +84,13 @@ class FrameUpload(Base):
 class TeamFrame(FrameResponse):
     model_config = ConfigDict(from_attributes=True)
     uploader_id: str
+    status: Literal["active", "withdrawn"]
+    withdrawn_at: datetime | None
+    withdrawn_by: str | None
 
-    @field_serializer("captured_at", "created_at")
-    def serialize_times(self, value: datetime) -> datetime:
-        return value.astimezone(timezone.utc)
+    @field_serializer("captured_at", "created_at", "withdrawn_at")
+    def serialize_times(self, value: datetime | None) -> datetime | None:
+        return value.astimezone(timezone.utc) if value is not None else None
 
 
 class UploadRecord(BaseModel):
@@ -113,7 +128,8 @@ def rollback_photo(db: Session, digest: str, destination: Path) -> None:
 def list_frames(scene_id: str, account: CurrentAccount, db: Database) -> list[Frame]:
     require_scene(db, account.team_id, scene_id)
     return list(db.scalars(
-        select(Frame).where(Frame.scene_id == scene_id).order_by(Frame.created_at, Frame.frame_id)
+        select(Frame).where(Frame.scene_id == scene_id, Frame.withdrawn_at.is_(None))
+        .order_by(Frame.created_at, Frame.frame_id)
     ))
 
 
@@ -157,7 +173,9 @@ def upload_frame(
         response.status_code = 200
         return captured_frame
 
-    frame = db.scalar(select(Frame).where(Frame.scene_id == scene_id, Frame.sha256 == digest))
+    frame = db.scalar(select(Frame).where(
+        Frame.scene_id == scene_id, Frame.sha256 == digest, Frame.withdrawn_at.is_(None),
+    ))
     new_frame = frame is None
     now = datetime.now(timezone.utc)
     observed = captured_at or now
@@ -193,6 +211,26 @@ def upload_frame(
     return frame
 
 
+@router.delete("/scenes/{scene_id}/frames/{frame_id}", status_code=204,
+               responses={**PHOTO_ACCESS_ERRORS, 403: {"model": ErrorResponse}, 409: {"model": ErrorResponse}})
+def withdraw_frame(scene_id: str, frame_id: str, account: CurrentAccount, db: Database) -> Response:
+    scene = require_scene(db, account.team_id, scene_id, for_update=True)
+    frame = db.scalar(select(Frame).where(Frame.scene_id == scene_id, Frame.frame_id == frame_id).with_for_update())
+    if frame is None:
+        raise ApiError(404, "FRAME_NOT_FOUND", "未找到该照片。")
+    if account.role != "admin" and account.account_id not in {scene.owner_id, frame.uploader_id}:
+        raise ApiError(403, "FRAME_WITHDRAW_FORBIDDEN", "只有首次上传者、场景创建者或管理员可以撤下照片。")
+    if frame.withdrawn_at is not None:
+        return Response(status_code=204)
+    in_use = db.scalar(select(RevisionFrame.revision_id).where(RevisionFrame.frame_id == frame_id).limit(1))
+    if in_use is not None:
+        raise ApiError(409, "FRAME_IN_USE", "这张照片已用于历史批次，无法撤下。")
+    frame.withdrawn_by = account.account_id
+    frame.withdrawn_at = datetime.now(timezone.utc)
+    db.commit()
+    return Response(status_code=204)
+
+
 @router.get("/scenes/{scene_id}/frames/{frame_id}/uploads", response_model=list[UploadRecord],
             responses=PHOTO_ACCESS_ERRORS)
 def frame_uploads(scene_id: str, frame_id: str, account: CurrentAccount, db: Database) -> list[FrameUpload]:
@@ -205,7 +243,9 @@ def frame_uploads(scene_id: str, frame_id: str, account: CurrentAccount, db: Dat
 
 @router.get("/frames/{frame_id}/image", response_class=FileResponse, responses=PHOTO_ACCESS_ERRORS)
 def get_image(frame_id: str, request: Request, account: CurrentAccount, db: Database) -> FileResponse:
-    frame = db.scalar(select(Frame).join(Scene).where(Frame.frame_id == frame_id, Scene.team_id == account.team_id))
+    frame = db.scalar(select(Frame).join(Scene).where(
+        Frame.frame_id == frame_id, Scene.team_id == account.team_id, Frame.withdrawn_at.is_(None),
+    ))
     if frame is None:
         raise ApiError(404, "FRAME_NOT_FOUND", "未找到该照片。")
     media_type = frame.media_type
