@@ -30,6 +30,13 @@ def positive_integer(value: str) -> int:
     return number
 
 
+def unit_interval(value: str) -> float:
+    number = float(value)
+    if not 0 <= number <= 1:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return number
+
+
 def prepare_images(sources: list[Path], directory: Path, long_edge: int) -> tuple[list[dict], tuple[int, int]]:
     from PIL import Image, ImageCms, ImageOps
 
@@ -220,22 +227,51 @@ def reconstruct(args: argparse.Namespace, calibrations=None) -> Path:
         brush_dir = staging / "brush"
         brush_dir.mkdir()
         start = perf_counter()
-        run_tool([
+        brush_command = [
             str(brush), str(staging),
             "--total-steps", str(args.steps),
             "--max-resolution", str(args.long_edge),
             "--max-splats", str(args.max_splats),
             "--export-every", str(args.steps),
             "--export-path", str(brush_dir),
-        ], staging / "brush.log")
+        ]
+        if args.ssim_weight is not None:
+            brush_command.extend(["--ssim-weight", str(args.ssim_weight)])
+        if args.eval_split_every is not None:
+            brush_command.extend([
+                "--eval-split-every", str(args.eval_split_every),
+                "--eval-every", str(args.steps), "--eval-save-to-disk",
+            ])
+        run_tool(brush_command, staging / "brush.log")
         brush_ply = brush_dir / f"export_{args.steps}.ply"
         gaussian_count = read_gaussian_count(brush_ply)
         ply = staging / "scene.ply"
         brush_ply.rename(ply)
+        artifacts = {"ply": {"path": ply.name, "bytes": ply.stat().st_size, "gaussians": gaussian_count}}
+
+        heldout_names = set()
+        if args.eval_split_every is not None:
+            evaluation = brush_dir / f"eval_{args.steps}"
+            renders = sorted(evaluation.glob("*.png"))
+            heldout_names = {path.name for path in renders}
+            registered_names = {Path(frame["prepared"]).name for frame in frames if frame["registered"]}
+            if (not heldout_names or not heldout_names < registered_names
+                    or any(path.stat().st_size == 0 for path in renders)):
+                raise ValueError("Brush evaluation must include only a nonempty subset of the registered frames")
+            output_evaluation = staging / "evaluation"
+            evaluation.rename(output_evaluation)
+            holdout_file = output_evaluation / "holdout.txt"
+            holdout_file.write_text("\n".join(sorted(heldout_names)) + "\n", encoding="utf-8")
+            artifacts["evaluation"] = {
+                "path": output_evaluation.name,
+                "holdout_list": holdout_file.relative_to(staging).as_posix(),
+                "frame_count": len(heldout_names),
+            }
+        for frame in frames:
+            frame["used_for_training"] = frame["registered"] and Path(frame["prepared"]).name not in heldout_names
         brush_dir.rmdir()
         timings["brush_and_export"] = round(perf_counter() - start, 3)
 
-        artifacts = {"ply": {"path": ply.name, "bytes": ply.stat().st_size, "gaussians": gaussian_count}}
         if sog_cli:
             print("Converting the full Gaussian model to SOG.", flush=True)
             start = perf_counter()
@@ -257,6 +293,8 @@ def reconstruct(args: argparse.Namespace, calibrations=None) -> Path:
                 "prepared_color_profile": "sRGB",
                 "brush_steps": args.steps,
                 "brush_max_splats": args.max_splats,
+                "brush_ssim_weight": args.ssim_weight,
+                "brush_eval_split_every": args.eval_split_every,
             },
             "colmap": registration,
             "brush_executable": str(brush),
@@ -279,10 +317,14 @@ def main() -> int:
     parser.add_argument("--long-edge", type=positive_integer, default=1200, help="Resize photos to this long edge")
     parser.add_argument("--steps", type=positive_integer, default=8000, help="Brush optimization steps")
     parser.add_argument("--max-splats", type=positive_integer, default=300_000, help="Brush Gaussian budget")
+    parser.add_argument("--ssim-weight", type=unit_interval, help="Optional Brush SSIM loss weight")
+    parser.add_argument("--eval-split-every", type=positive_integer, help="Hold out every Nth registered frame and save final renders")
     parser.add_argument("--splat-transform-cli", type=Path, help="Optional local SplatTransform cli.mjs to export SOG")
     parser.add_argument("--sog-gpu", default="0", help="SplatTransform GPU index or cpu")
     parser.add_argument("--camera-calibration", type=Path, help="JSON calibration in image order")
     args = parser.parse_args()
+    if args.eval_split_every == 1:
+        parser.error("--eval-split-every must be at least 2")
 
     try:
         calibrations = json.loads(args.camera_calibration.read_text(encoding="utf-8")) if args.camera_calibration else None

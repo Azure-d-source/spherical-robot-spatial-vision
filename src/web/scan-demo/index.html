@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>球迹视界 · 仿真扫描台</title>
+  <style>__STYLE__</style>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>OrbitForge <span>球迹视界</span></div>
+    <span class="mode">本地仿真</span>
+  </header>
+  <main>
+    <div class="hero">
+      <div><h1>仿真扫描台</h1><p>移动虚拟球机，从展品正面补拍到背面。</p></div>
+      <button class="primary" id="sweep" type="button">开始一圈补拍</button>
+    </div>
+    <div class="workbench">
+      <section class="card route">
+        <div class="card-title"><h2>球机航迹</h2><output id="counter" aria-live="polite"></output></div>
+        <div class="map" id="map" aria-label="选择球机拍摄机位"></div>
+        <div class="route-readout">
+          <label for="angle">相机方位 <output id="bearing"></output></label>
+          <input id="angle" type="range" step="1" aria-label="相机方位">
+          <div class="capture-actions">
+            <button id="shot" type="button">采集当前帧</button>
+            <button id="reset" type="button">重置为正面</button>
+          </div>
+        </div>
+      </section>
+      <div class="views">
+        <section class="card sensor">
+          <div class="card-title"><h2>球载相机</h2><span>展品 R7</span></div>
+          <div class="sensor-grid">
+            <figure><img id="rgb" alt="当前球载相机的仿真 RGB 画面"><figcaption>RGB</figcaption></figure>
+            <figure><img id="depth" alt="同机位的仿真真值深度图"><figcaption>真值深度</figcaption></figure>
+          </div>
+          <div class="depth-scale"><span id="depth-limits"></span><div><span>近</span><i></i><span>远</span></div></div>
+        </section>
+        <section class="card geometry">
+          <div class="card-title"><h2>补拍点云</h2><output id="point-count"></output></div>
+          <canvas id="cloud" tabindex="0" aria-label="可旋转点云，使用方向键改变视角"></canvas>
+          <div class="cloud-controls">
+            <span>拖动旋转 · 滚轮缩放</span>
+            <button id="point-front" type="button">看正面</button>
+            <button id="point-back" type="button">看背面</button>
+          </div>
+        </section>
+      </div>
+    </div>
+    <section class="card fit">
+      <div class="card-title fit-title">
+        <div><h2>物体 3DGS 重建</h2><p>从背面同一留出机位对照，两组均已用 Brush 训练。</p></div>
+        <a class="primary" href="viewer.html" target="_blank" rel="noopener">打开 3DGS 查看器 ↗</a>
+      </div>
+      <div class="fit-grid">
+        <figure><img id="heldout" alt="背面留出机位的仿真 RGB 真值"><figcaption>仿真原图 <span id="heldout-angle"></span></figcaption></figure>
+        <figure><img id="fit-front" alt="只用正面相机训练后渲染的背面"><figcaption>正面组 <span id="front-count"></span></figcaption></figure>
+        <figure><img id="fit-full" alt="绕物补拍训练后渲染的背面"><figcaption>环拍组 <span id="full-count"></span></figcaption></figure>
+      </div>
+      <p class="note">点云由深度反投影后融合。3DGS 使用同组照片优化，以该组深度点作初始化，浏览时加载训练好的环拍结果。</p>
+    </section>
+  </main>
+  <script id="capture-data" type="application/json">__CAPTURE_DATA__</script>
+  <script id="fit-data" type="application/json">__FIT_DATA__</script>
+  <script>__SCRIPT__</script>
+</body>
+</html>

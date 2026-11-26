@@ -57,6 +57,54 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def save_raw_prediction(prediction, target: Path, view_count: int) -> dict:
+    """Save DA3's per-view arrays before the GLB exporter modifies them."""
+    import numpy as np
+
+    arrays = {
+        "image": np.asarray(prediction.processed_images),
+        "depth": np.asarray(prediction.depth),
+        "conf": np.asarray(prediction.conf),
+        "extrinsics": np.asarray(prediction.extrinsics),
+        "intrinsics": np.asarray(prediction.intrinsics),
+    }
+    depth = arrays["depth"]
+    if depth.ndim != 3 or depth.shape[0] != view_count or min(depth.shape) < 1:
+        raise ValueError("DA3 depth must have shape (views, height, width)")
+    expected = {
+        "image": (depth.shape + (3,),),
+        "conf": (depth.shape,),
+        "intrinsics": ((view_count, 3, 3),),
+        "extrinsics": ((view_count, 3, 4), (view_count, 4, 4)),
+    }
+    if getattr(prediction, "sky", None) is not None:
+        arrays["sky_mask"] = np.asarray(prediction.sky)
+        expected["sky_mask"] = (depth.shape,)
+    for field, shapes in expected.items():
+        if arrays[field].shape not in shapes:
+            raise ValueError(f"Unexpected DA3 {field} shape: {arrays[field].shape}")
+    if arrays["image"].dtype != np.uint8:
+        raise ValueError("DA3 processed image must be uint8 RGB")
+    for field in ("depth", "conf", "intrinsics", "extrinsics"):
+        if not np.issubdtype(arrays[field].dtype, np.floating):
+            raise ValueError(f"Expected floating-point DA3 {field}")
+    for field in ("extrinsics", "intrinsics"):
+        if not np.isfinite(arrays[field]).all():
+            raise ValueError(f"DA3 {field} contains non-finite camera parameters")
+    if "sky_mask" in arrays and arrays["sky_mask"].dtype != np.bool_:
+        raise ValueError("DA3 sky_mask must be boolean")
+
+    np.savez_compressed(target, **arrays)
+    return {
+        "path": target.name,
+        "bytes": target.stat().st_size,
+        "sha256": sha256_file(target),
+        "depth_shape": list(depth.shape),
+        "fields": list(arrays),
+        "camera_convention": "opencv_world_to_camera",
+    }
+
+
 def export_point_cloud(
     model,
     images: list[Path],
@@ -68,6 +116,7 @@ def export_point_cloud(
     max_points: int = 200_000,
     with_depth: bool = False,
     calibrations: list[dict] | None = None,
+    with_raw: bool = False,
 ) -> dict:
     """Export a complete batch into a new directory and return its manifest."""
     images = [path.resolve() for path in images]
@@ -96,17 +145,30 @@ def export_point_cloud(
     with TemporaryDirectory(prefix=".point-cloud-", dir=output_dir.parent) as temporary:
         staging = Path(temporary)
         started = perf_counter()
-        model.inference(
+        export_format = "glb-depth_vis" if with_depth else "glb"
+        prediction = model.inference(
             [str(path) for path in images],
             process_res=process_res,
             ref_view_strategy="first",
-            export_dir=str(staging),
-            export_format="glb-depth_vis" if with_depth else "glb",
+            export_dir=None if with_raw else str(staging),
+            export_format=export_format,
             show_cameras=False,
             num_max_points=max_points,
             export_kwargs={"glb": {"export_depth_vis": False}},
             **camera_inputs,
         )
+        if with_raw:
+            from depth_anything_3.utils.export import export
+
+            # Write synchronously: the pinned DA3 NPZ exporter uses a background thread.
+            # Keeping the arrays before GLB export also preserves the original sky depths.
+            raw_prediction = save_raw_prediction(prediction, staging / "raw.npz", len(images))
+            export(
+                prediction,
+                export_format,
+                str(staging),
+                glb={"export_depth_vis": False, "show_cameras": False, "num_max_points": max_points},
+            )
         elapsed = perf_counter() - started
         glb = staging / "scene.glb"
         point_count = count_points(glb)
@@ -147,6 +209,9 @@ def export_point_cloud(
                 "scale": "relative",
             },
         }
+        if with_raw:
+            manifest["parameters"]["with_raw"] = True
+            manifest["result"]["raw_prediction"] = raw_prediction
         (staging / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
@@ -164,6 +229,7 @@ def main() -> int:
     parser.add_argument("--max-points", type=positive_integer, default=200_000, help="GLB point limit, default 200000")
     parser.add_argument("--with-depth", action="store_true", help="Include RGB/depth previews for each photo")
     parser.add_argument("--camera-calibration", type=Path, help="JSON calibration in image order")
+    parser.add_argument("--with-raw", action="store_true", help="Save per-view DA3 depth, RGB, confidence and cameras")
     args = parser.parse_args()
 
     try:
@@ -179,6 +245,7 @@ def main() -> int:
             max_points=args.max_points,
             with_depth=args.with_depth,
             calibrations=calibrations,
+            with_raw=args.with_raw,
         )
     except Exception as error:
         print(f"Point cloud export failed: {error}", file=sys.stderr)
