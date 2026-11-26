@@ -6,6 +6,8 @@
 
 ## 1. 准备素材与离线环境
 
+本地采集工作台已接入真实 DA3 和 3DGS 作业。浏览器通过 `POST /api/jobs` 提交，通过 `GET /api/scenes/{scene_id}/jobs` 查询状态和产物。普通 3DGS 配方接受满足最低配准条件的部分注册，公开 32 图验收配方要求 32/32 后才发布。 [工作台启动](../../src/README.md#本地启动工作台) · [P3 工作台 GPU 实测](../experiments/workbench-gpu-smoke.md)
+
 在联网准备阶段下载固定版本的工具、模型权重和公开素材。准备 Python 环境、DA3 权重、本地浏览模块、Brush、SplatTransform，以及视频线路使用的 FFmpeg，记录来源、版本、输入尺寸和设备信息。本机验证以已经跑过样例的 RTX 4060 Laptop 8 GB 为起点。目录为验证约定，可按实际工作盘安排。
 
 ```text

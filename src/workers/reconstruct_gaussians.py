@@ -15,6 +15,14 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 
 
+class RegistrationError(ValueError):
+    """COLMAP did not yield a component usable by Brush."""
+
+    def __init__(self, message: str, unregistered_indices: list[int]):
+        super().__init__(message)
+        self.unregistered_indices = unregistered_indices
+
+
 def positive_integer(value: str) -> int:
     number = int(value)
     if number < 1:
@@ -70,7 +78,30 @@ def prepare_images(sources: list[Path], directory: Path, long_edge: int) -> tupl
     return frames, output_size
 
 
-def register_images(staging: Path, frames: list[dict]) -> dict:
+def orient_simulation(model, frames, calibrations, estimate_similarity):
+    """Align a solved COLMAP model to the simulation's vertical axis and orbit center."""
+    import numpy as np
+
+    registered = {model.image(index).name: model.image(index) for index in model.reg_image_ids()}
+    views = [(registered[name], calibration)
+             for frame, calibration in zip(frames, calibrations, strict=True)
+             if (name := Path(frame["prepared"]).name) in registered]
+    observed = np.array([image.projection_center() for image, _ in views])
+    known = np.array([calibration["center"] for _, calibration in views])
+    # SuperSplat rotates PLY and SOG by 180° around Z. Store in that format's -Y-up system.
+    target = known * [-1, -1, 1]
+    transform = estimate_similarity(observed, target)
+    if transform is None:
+        return None
+    residuals = np.linalg.norm(transform * observed - target, axis=1)
+    if not np.all(np.isfinite(residuals)) or max(residuals) > 0.35:
+        return None
+    model.transform(transform)
+    initial = views[0][1]
+    return {"position": initial["center"], "target": initial["target"], "fov": 40}
+
+
+def register_images(staging: Path, frames: list[dict], calibrations=None) -> dict:
     import pycolmap
 
     database = staging / "colmap.db"
@@ -85,31 +116,46 @@ def register_images(staging: Path, frames: list[dict]) -> dict:
         pycolmap.match_exhaustive(database, device=pycolmap.Device.cpu)
         models = pycolmap.incremental_mapping(database, images, mapper_directory)
         if not models:
-            raise ValueError("COLMAP registered no model. Check image overlap, sharpness and view translation.")
+            raise RegistrationError(
+                "COLMAP registered no model. Check image overlap, sharpness and view translation.",
+                list(range(len(frames))),
+            )
         largest = max(models.values(), key=lambda model: (model.num_reg_images(), model.num_points3D()))
+        registered = {largest.image(image_id).name for image_id in largest.reg_image_ids()}
         if largest.num_reg_images() < 3 or largest.num_points3D() == 0:
-            raise ValueError(
-                f"Largest COLMAP model has only {largest.num_reg_images()} registered photos "
-                f"and {largest.num_points3D()} sparse points. Add intermediate views and retry."
+            raise RegistrationError(
+                f"Largest COLMAP model has {largest.num_reg_images()} registered photos "
+                f"and {largest.num_points3D()} sparse points. Add intermediate views and retry.",
+                [index for index, frame in enumerate(frames) if Path(frame["prepared"]).name not in registered],
             )
         model_dir = staging / "sparse" / "0"
         model_dir.mkdir(parents=True)
+        viewer_camera = orient_simulation(largest, frames, calibrations, pycolmap.estimate_sim3d) if calibrations else None
         largest.write(model_dir)
-        registered = {largest.image(image_id).name for image_id in largest.reg_image_ids()}
         point_count = largest.num_points3D()
         model_count = len(models)
 
-    for frame in frames:
+    unregistered = []
+    for input_index, frame in enumerate(frames):
         frame["registered"] = Path(frame["prepared"]).name in registered
+        if not frame["registered"]:
+            unregistered.append({
+                "input_index": input_index,
+                "prepared": frame["prepared"],
+                "source_sha256": frame["source_sha256"],
+            })
     return {
         "version": pycolmap.__version__,
         "camera_model": "SIMPLE_RADIAL",
         "shared_camera": True,
         "matching": "CPU SIFT and exhaustive matching",
         "component_count": model_count,
-        "registered_images": len(registered),
+        "registered_images": len(frames) - len(unregistered),
+        "total_images": len(frames),
+        "unregistered_frames": unregistered,
         "sparse_points": point_count,
         "selected_model": "sparse/0",
+        "viewer_camera": viewer_camera,
     }
 
 
@@ -141,7 +187,7 @@ def read_gaussian_count(ply: Path) -> int:
     raise ValueError(f"Brush did not export a populated Gaussian PLY: {ply}")
 
 
-def reconstruct(args: argparse.Namespace) -> Path:
+def reconstruct(args: argparse.Namespace, calibrations=None) -> Path:
     sources = [path.resolve() for path in args.images]
     if len(set(sources)) < 3 or len(set(sources)) != len(sources):
         raise ValueError("Provide at least three different JPEG or PNG photos in capture order")
@@ -167,7 +213,7 @@ def reconstruct(args: argparse.Namespace) -> Path:
 
         print(f"Registering {len(frames)} prepared images at {size[0]}×{size[1]}", flush=True)
         start = perf_counter()
-        registration = register_images(staging, frames)
+        registration = register_images(staging, frames, calibrations)
         timings["colmap"] = round(perf_counter() - start, 3)
 
         print(f"Registered {registration['registered_images']}/{len(frames)} images. Running Brush.", flush=True)
@@ -235,10 +281,16 @@ def main() -> int:
     parser.add_argument("--max-splats", type=positive_integer, default=300_000, help="Brush Gaussian budget")
     parser.add_argument("--splat-transform-cli", type=Path, help="Optional local SplatTransform cli.mjs to export SOG")
     parser.add_argument("--sog-gpu", default="0", help="SplatTransform GPU index or cpu")
+    parser.add_argument("--camera-calibration", type=Path, help="JSON calibration in image order")
     args = parser.parse_args()
 
     try:
-        manifest = reconstruct(args)
+        calibrations = json.loads(args.camera_calibration.read_text(encoding="utf-8")) if args.camera_calibration else None
+        manifest = reconstruct(args, calibrations)
+    except RegistrationError as error:
+        print(f"INSUFFICIENT_REGISTRATION: {error}", file=sys.stderr)
+        print(f"UNREGISTERED_INPUT_INDICES: {json.dumps(error.unregistered_indices)}", file=sys.stderr)
+        return 1
     except Exception as error:
         print(f"3DGS reconstruction failed: {error}", file=sys.stderr)
         return 1

@@ -4,12 +4,51 @@
 
 | 目录 | 阶段与职责 |
 | --- | --- |
-| `workers/` | 本阶段建设。视频抽帧、DA3 多视角点云与按需深度图、COLMAP、Brush 及高斯资产导出。 |
-| `web/` | 工作台集成阶段。球体与展品摆放、球载相机、点云和高斯查看。 |
-| `api/` | 工作台集成阶段确认服务接口。管理场景、布景版本、照片批次、作业和产物。 |
+| `workers/` | 视频抽帧，以及领取作业并调用 DA3、COLMAP、Brush 和 SplatTransform。 |
+| `web/` | 场景、照片、批次、作业状态、注册覆盖、点云与 3DGS 查看、虚拟相机取景。 |
+| `api/` | FastAPI 管理场景、原图、批次、作业租约和产物发布。`api/platform/` 提供使用 PostgreSQL 和账号登录的团队工作台。 |
 | `edge/` | 实体球接入阶段。设备拍照、缓存和传输。 |
 
 文件交接与验收依据见 [系统架构](../docs/design/platform-architecture.md)和[实施指南](../docs/design/implementation-guide.md)。
+
+## 本地启动工作台
+
+使用账号登录的答辩和内测环境见 [团队工作台启动说明](api/platform/README.md)。下面是历史 SQLite 原型的本地启动方式。
+
+从仓库根目录执行。开发环境使用 Python 3.12 和 Node.js 22.12 或更高版本。数据默认保存在 `data/runtime/`，可通过 `SPATIAL_DATA_DIR` 指定其他目录。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r src/api/requirements.txt
+npm --prefix src/web ci
+npm --prefix src/web run build
+.\.venv\Scripts\python.exe -m uvicorn src.api.main:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+打开 [采集工作台](http://127.0.0.1:8000/) 或 [API 文档](http://127.0.0.1:8000/docs)。编辑前端时保留 API 进程，在另一个终端执行 `npm --prefix src/web run dev`，Vite 转发 API 请求。修改后端时可在 Uvicorn 命令末尾加 `--reload --reload-dir src/api`。
+
+启动真实 Worker 时，两端使用同一数据目录。按 [P3 本机 GPU 联调记录](../docs/experiments/workbench-gpu-smoke.md#启动与复现) 配置 `ORBIT_DA3_PY`、`ORBIT_DA3_MODEL`、`ORBIT_GS_PY`、`ORBIT_BRUSH` 和可选的 `ORBIT_SOG_CLI`。两类执行器各自使用对应的 Python 解释器。一张 GPU 启动一个 Worker。若启用 Worker 鉴权，API 和 Worker 使用同一个 `SPATIAL_WORKER_TOKEN`。
+
+```powershell
+.\.venv\Scripts\python.exe -m src.workers.runner --api-url http://127.0.0.1:8000
+```
+
+### 查看三维结果与虚拟取景
+
+- 在工作台的 **查看批次** 选择已完成的批次。**点云** 打开该批次的 GLB，支持拖动、缩放、调节点尺寸和重置视角。**3DGS** 从同源 iframe 加载该批次的 SOG，缺少 SOG 时打开 PLY。
+- 创建来源为 **虚拟相机** 的场景，打开 **虚拟相机** 标签。用预设或球体角度、高度和距离预览取景。点击 **拍摄并上传** 补拍一张，或点击 **环拍并上传 24 张** 完成一圈。上传的照片会自动加入当前布局的待确认批次。
+- 点击 **确认照片批次**，分别提交 **多图点云融合** 和 **3DGS 实景重建 → 普通重建**。看到桌上机器人的黄色 **07** 背面徽章后，可移动或旋转展品，捕捉新布局并确认新批次。使用 **查看批次**切换历史，展开 **查看批次的原图顺序** 可在工作台里打开任意原图。 [仿真扫描验收记录](../docs/experiments/sim-scan-demo.md)
+- `npm run dev` 和 `npm run build` 从锁定版本的 npm 包复制 SuperSplat 脚本、样式、WASM 和许可到 `public/supersplat/`。生产构建将它们复制到 `dist/supersplat/`，启动 FastAPI 后与工作台同源，浏览无需 CDN。构建会检查 Three.js 仅通过两个三维模块的动态导入加载。
+
+2026 年 11 月 24 日在本机 Edge 验证了上述流程。复用 P3 的真实 GLB 和 32 图 SOG、PLY，验证了点云调参与环绕查看。模拟旧批次晚完成后，正在查看的批次和画布保持稳定。正面、左侧取景上传的两张 RGB PNG 哈希不同，实际 DA3 融合返回 200,000 点，工作台轮询后加载新 GLB。浏览器限制外网访问期间，查看与取景流程未发出外部请求。
+
+## 回归验证
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r tests/requirements.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+npm --prefix src/web run build
+```
 
 ## 本地视觉作业
 

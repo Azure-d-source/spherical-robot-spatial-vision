@@ -22,6 +22,8 @@
 
 ## 开发入口
 
-- [视觉作业与运行命令](src/README.md) · [数据组织](data/README.md)
+- [本地启动工作台](src/README.md#本地启动工作台) · [P3 本机 GPU 联调记录](docs/experiments/workbench-gpu-smoke.md)
+- [视觉作业与运行命令](src/README.md#本地视觉作业) · [数据组织](data/README.md)
 - [项目总览](docs/design/project-overview.md) · [系统架构](docs/design/platform-architecture.md) · [实施指南](docs/design/implementation-guide.md)
+- [三维查看与虚拟取景](src/README.md#查看三维结果与虚拟取景)
 - [技术调研](docs/research/spherical-robot-spatial-vision.md) · [参赛与交付清单](docs/competition/submission-checklist.md)
