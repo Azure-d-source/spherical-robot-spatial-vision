@@ -33,6 +33,17 @@ ORIGIN = "https://workbench.example.test"
 WORKER_HEADERS = {"X-Worker-Token": "private-test-worker"}
 
 
+class PublicDeploymentTests(unittest.TestCase):
+    def test_public_origin_requires_an_explicit_worker_token(self):
+        settings = PlatformSettings("postgresql+psycopg://test@localhost/test", ORIGIN)
+        for token in (None, "", "  "):
+            with self.subTest(token=token):
+                with self.assertRaisesRegex(ValueError, "SPATIAL_WORKER_TOKEN"):
+                    create_app(replace(settings, worker_token=token))
+        self.assertTrue(create_app(replace(settings, worker_token=WORKER_HEADERS["X-Worker-Token"])).state.secure_cookies)
+        self.assertIsNone(create_app(replace(settings, public_origin="http://127.0.0.1:8000")).state.worker_token)
+
+
 @unittest.skipUnless(DB_URL, "SPATIAL_TEST_DATABASE_URL is required for PostgreSQL integration tests")
 class PlatformApiTests(unittest.TestCase):
     def setUp(self):
@@ -138,6 +149,15 @@ class PlatformApiTests(unittest.TestCase):
             self.assertEqual((response.status_code, response.json()["code"]), (403, "ORIGIN_FORBIDDEN"))
             self.assertEqual(client.get("/api/scenes").json(), [])
             self.assertEqual(client.get("/api/health").json(), {"status": "ok", "workbench": "team"})
+
+    def test_worker_requires_token_even_when_forwarder_connects_from_loopback(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 41234)) as client:
+            path = "/api/internal/workers/claim"
+            for headers in ({}, {"X-Worker-Token": "wrong-token"}):
+                denied = client.post(path, json={}, headers=headers)
+                self.assertEqual((denied.status_code, denied.json()["code"]), (401, "INVALID_WORKER_TOKEN"))
+            self.assertEqual(client.post(path, json={}, headers=WORKER_HEADERS).status_code, 204)
 
     def test_workbench_and_wasm_load_before_login_but_scenes_require_a_session(self):
         dist = Path(self.enterContext(TemporaryDirectory()))

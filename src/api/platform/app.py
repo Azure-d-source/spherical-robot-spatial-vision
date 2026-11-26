@@ -12,7 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..web import WorkbenchFiles
 from . import accounts, frames, jobs, revisions, scenes, workers
-from .config import PlatformSettings
+from .config import LOOPBACK_HOSTS, PlatformSettings
 from .database import Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
 
@@ -20,6 +20,8 @@ from .errors import ApiError, ErrorResponse, InvalidRequest
 def create_app(settings: PlatformSettings | None = None) -> FastAPI:
     settings = settings or PlatformSettings.from_env()
     origin = urlsplit(settings.public_origin)
+    if origin.hostname not in LOOPBACK_HOSTS and not (settings.worker_token or "").strip():
+        raise ValueError("Set SPATIAL_WORKER_TOKEN before serving the API on a public HTTPS origin")
 
     def open_database():
         engine = create_engine(settings.database_url, pool_pre_ping=True)

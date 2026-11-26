@@ -8,6 +8,7 @@ from sqlalchemy.engine import make_url
 from ..settings import DEFAULT_WEB_DIST, ROOT
 
 DEFAULT_DATA_DIR = ROOT / "data" / "platform-runtime"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,7 @@ class PlatformSettings:
         if (not url.hostname or url.username or url.password
                 or url.path or url.query or url.fragment
                 or not (url.scheme == "https" or (
-                    url.scheme == "http" and url.hostname in {"127.0.0.1", "localhost", "::1"}
+                    url.scheme == "http" and url.hostname in LOOPBACK_HOSTS
                 ))):
             raise ValueError("SPATIAL_PUBLIC_ORIGIN must be an HTTPS origin or loopback HTTP")
 
