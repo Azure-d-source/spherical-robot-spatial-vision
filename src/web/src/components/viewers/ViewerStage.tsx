@@ -1,6 +1,7 @@
-import { lazy, Suspense, useId } from 'react'
+import { lazy, Suspense, useId, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Viewport } from '../../Panels'
+import { recipeLabel, timeLabel } from '../../api'
 import type { Frame, Job, Revision } from '../../api'
 import { layoutTitle } from '../../simulationLayout'
 import type { SimulationLayout } from '../../simulationLayout'
@@ -16,6 +17,12 @@ const tabs = [
   { id: 'virtual', label: '虚拟相机' },
 ] as const
 export type ViewerMode = (typeof tabs)[number]['id']
+type ModelMode = Extract<ViewerMode, 'points' | 'splat'>
+
+const modelFiles: Record<ModelMode, readonly string[]> = {
+  points: ['scene.glb'],
+  splat: ['scene.sog', 'scene.ply'],
+}
 
 type Props = {
   sceneId: string
@@ -36,27 +43,17 @@ type Props = {
   resetFrame: () => void
 }
 
-function findViewableResults(jobs: Job[], revision: Revision | undefined) {
-  const available = jobs.filter(
+function availableRuns(jobs: Job[], revision: Revision | undefined, mode: ModelMode) {
+  return jobs.filter(
     (job) =>
-      job.revision_id === revision?.revision_id && job.status === 'succeeded',
+      job.revision_id === revision?.revision_id && job.status === 'succeeded'
+      && job.artifacts?.some((file) => modelFiles[mode].includes(file.filename)),
   ).sort((a, b) => (b.run_number ?? 0) - (a.run_number ?? 0))
-  const point = available.find((job) =>
-    job.artifacts?.some((file) => file.filename === 'scene.glb'),
-  )
-  const splat = available.find((job) =>
-    job.artifacts?.some((file) => file.filename === 'scene.sog' || file.filename === 'scene.ply'),
-  )
-  return {
-    points: point?.artifacts?.find((file) => file.filename === 'scene.glb')
-      ?.url,
-    splats: ['scene.sog', 'scene.ply'].flatMap((name) => {
-      const file = splat?.artifacts?.find(
-        (artifact) => artifact.filename === name,
-      )
-      return file ? [file.url] : []
-    }),
-  }
+}
+
+function historyLabel(job: Job) {
+  const run = job.run_number === undefined ? '' : `第 ${job.run_number} 次 · `
+  return run + recipeLabel(job) + ' · ' + timeLabel(job.created_at)
 }
 
 export function ViewerStage({
@@ -78,8 +75,27 @@ export function ViewerStage({
   resetFrame,
 }: Props) {
   const id = useId()
-  const assets = findViewableResults(jobs, revision)
+  const [pinnedRuns, setPinnedRuns] = useState<Record<string, string>>({})
+  const modelMode = mode === 'points' || mode === 'splat' ? mode : undefined
+  const key = revision && modelMode ? `${revision.revision_id}:${modelMode}` : ''
+  const runs = modelMode ? availableRuns(jobs, revision, modelMode) : []
+  const latest = runs[0]
+  const pinnedRun = runs.find((run) => run.job_id === pinnedRuns[key])
+  const selectedRun = pinnedRun ?? latest
+  const urls = modelMode && selectedRun ? modelFiles[modelMode].flatMap((name) => {
+    const file = selectedRun.artifacts?.find((artifact) => artifact.filename === name)
+    return file ? [file.url] : []
+  }) : []
   const visibleTabs = readOnly ? tabs.filter((tab) => tab.id !== 'virtual') : tabs
+
+  function selectRun(jobId: string) {
+    setPinnedRuns((previous) => {
+      const next = { ...previous }
+      if (jobId) next[key] = jobId
+      else delete next[key]
+      return next
+    })
+  }
 
   function moveTab(
     event: KeyboardEvent<HTMLButtonElement>,
@@ -140,6 +156,17 @@ export function ViewerStage({
             </select>
           </label>
         )}
+        {latest && (
+          <label className="viewer-run">
+            查看运行
+            <select value={pinnedRun?.job_id ?? ''} onChange={(event) => selectRun(event.target.value)}>
+              <option value="">
+                最新成功结果{latest.run_number !== undefined && ` · 第 ${latest.run_number} 次`}
+              </option>
+              {runs.map((job) => <option key={job.job_id} value={job.job_id}>{historyLabel(job)}</option>)}
+            </select>
+          </label>
+        )}
       </div>
       <div role="tabpanel" id={id + '-panel'} aria-labelledby={id + '-' + mode}>
         <Suspense
@@ -153,18 +180,18 @@ export function ViewerStage({
             <Viewport frame={frame} view={view} reset={resetFrame} />
           )}
           {mode === 'points' &&
-            (assets.points ? (
-              <PointCloudViewer key={assets.points} url={assets.points} />
+            (urls[0] ? (
+              <PointCloudViewer key={urls[0]} url={urls[0]} />
             ) : (
               <p className="viewer-empty">
                 {readOnly ? '当前批次暂无点云。' : '当前批次暂无点云。提交深度或点云融合任务后，结果会显示在这里。'}
               </p>
             ))}
           {mode === 'splat' &&
-            (assets.splats.length ? (
+            (urls.length ? (
               <SuperSplatFrame
-                key={assets.splats.join(',')}
-                urls={assets.splats}
+                key={urls.join(',')}
+                urls={urls}
               />
             ) : (
               <p className="viewer-empty">

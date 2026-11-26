@@ -525,6 +525,7 @@ h1 {
   min-height: 280px;
 }
 .viewer-revision,
+.viewer-run,
 .viewer-tools label {
   display: flex;
   flex-wrap: wrap;
@@ -532,7 +533,13 @@ h1 {
   gap: 0.5rem;
   font-size: 0.875rem;
 }
-.viewer-revision select {
+.viewer-revision,
+.viewer-run {
+  min-width: 0;
+  max-width: 100%;
+}
+.viewer-revision select,
+.viewer-run select {
   max-width: 100%;
 }
 .viewer-graphics {
