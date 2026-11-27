@@ -3,6 +3,7 @@ import { kinds, recipeLabel, timeLabel } from './api'
 import type { Frame, Job, Kind, Revision } from './api'
 import { OrbitView } from './OrbitView'
 import { frameLabel, layoutTitle } from './simulationLayout'
+import { VideoSourceDetails } from './VideoSourceDetails'
 
 export function Viewport({
   frame,
@@ -278,6 +279,9 @@ export function JobsPanel({
                     ) : (
                       id
                     )}
+                    {revision.video_sources?.[id]?.map((source) => (
+                      <VideoSourceDetails key={source.candidate_id} source={source} />
+                    ))}
                   </li>
                 )
               })}

@@ -951,6 +951,50 @@ select {
   color: inherit;
   overflow: auto;
 }
+.workbench-dialog.video-import {
+  width: min(780px, calc(100% - 24px));
+}
+.video-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+.video-import progress {
+  width: 100%;
+}
+.video-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.video-candidate img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  background: #0a1118;
+  border-radius: 4px;
+}
+.form-body .video-candidate label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+}
+.video-candidate input[type='checkbox'] {
+  width: auto;
+}
+.video-source-details {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+.video-source-details dd {
+  margin: 0 0 8px;
+}
 .workbench-dialog::backdrop {
   background: rgb(7 13 20 / 75%);
 }

@@ -56,15 +56,16 @@ def worker_access(request: Request, x_worker_token: Annotated[str | None, Depend
 
 
 def batch_frames(db: Session, revision_id: str, photos: Path) -> list[dict]:
-    query = (select(Frame).join(RevisionFrame, RevisionFrame.frame_id == Frame.frame_id)
+    query = (select(Frame, RevisionFrame.video_sources).join(RevisionFrame, RevisionFrame.frame_id == Frame.frame_id)
              .where(RevisionFrame.revision_id == revision_id).order_by(RevisionFrame.position))
     return [
         dict(
             frame_id=frame.frame_id, sha256=frame.sha256, view_label=frame.view_label,
             width=frame.width, height=frame.height,
             filename=photo_path(photos, frame.sha256, frame.media_type).name,
+            **({"video_sources": sources} if sources else {}),
         )
-        for frame in db.scalars(query)
+        for frame, sources in db.execute(query)
     ]
 
 

@@ -14,6 +14,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import perf_counter
 
+WEB_MAX_EDGE = 1920
+WEB_MAX_PIXELS = 24_000_000
+WEB_TIMEOUT = 90
+
 
 def finite_number(value: str) -> float:
     number = float(value)
@@ -42,6 +46,7 @@ def extract_frames(
     duration: float | None = None,
     fps: float = 2,
     max_frames: int = 120,
+    bounded: bool = False,
 ) -> dict:
     """Publish a fresh extraction directory and return the ordered frame manifest."""
     if not math.isfinite(start) or start < 0:
@@ -62,7 +67,8 @@ def extract_frames(
         raise FileNotFoundError(f"FFmpeg executable not found: {ffmpeg}")
     executable = str(Path(executable).resolve())
 
-    probe = subprocess.run([executable, "-version"], capture_output=True, check=True)
+    timeout = WEB_TIMEOUT if bounded else None
+    probe = subprocess.run([executable, "-version"], capture_output=True, check=True, timeout=timeout)
     version = probe.stdout.decode("utf-8", errors="replace").splitlines()[0]
     with video.open("rb") as source:
         source_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
@@ -71,20 +77,32 @@ def extract_frames(
     with TemporaryDirectory(prefix=".video-frames-", dir=output_dir.parent) as temporary:
         staging = Path(temporary)
         command = [executable, "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror"]
+        filters = f"fps={decimal_argument(fps)}"
+        if bounded:
+            command += [
+                "-protocol_whitelist", "file", "-f", "mov", "-enable_drefs", "0",
+                "-max_pixels", str(WEB_MAX_PIXELS), "-threads", "2", "-filter_threads", "2",
+            ]
+            filters += (
+                f",scale=w='min({WEB_MAX_EDGE},iw)':h='min({WEB_MAX_EDGE},ih)'"
+                ":force_original_aspect_ratio=decrease"
+            )
         command += ["-ss", decimal_argument(start), "-i", str(video)]
         if duration is not None:
             command += ["-t", decimal_argument(duration)]
         command += [
             "-map", "0:V:0",
-            "-vf", f"fps={decimal_argument(fps)}",
+            "-vf", filters,
             "-frames:v", str(max_frames),
             "-c:v", "png",
             "-pix_fmt", "rgb24",
             "-start_number", "1",
-            str(staging / "frame_%06d.png"),
         ]
+        if bounded:
+            command += ["-threads", "2"]
+        command.append(str(staging / "frame_%06d.png"))
         started = perf_counter()
-        result = subprocess.run(command, capture_output=True, check=False)
+        result = subprocess.run(command, capture_output=True, check=False, timeout=timeout)
         elapsed = perf_counter() - started
         if result.returncode:
             detail = result.stderr.decode("utf-8", errors="replace").strip()[-2000:]
@@ -109,6 +127,8 @@ def extract_frames(
             "frames": [path.name for path in frames],
             "result": {"frame_count": len(frames), "extraction_seconds": round(elapsed, 3)},
         }
+        if bounded:
+            manifest["parameters"]["max_edge"] = WEB_MAX_EDGE
         (staging / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )

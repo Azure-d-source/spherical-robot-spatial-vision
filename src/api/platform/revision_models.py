@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -26,6 +27,10 @@ class Revision(Base):
     def frame_ids(self) -> list[str]:
         return [frame.frame_id for frame in self.frames]
 
+    @property
+    def video_sources(self) -> dict[str, list[dict]]:
+        return {frame.frame_id: frame.video_sources for frame in self.frames if frame.video_sources}
+
 
 class RevisionFrame(Base):
     __tablename__ = "revision_frames"
@@ -43,3 +48,4 @@ class RevisionFrame(Base):
     position: Mapped[int] = mapped_column(primary_key=True)
     scene_id: Mapped[str] = mapped_column(String(32))
     frame_id: Mapped[str] = mapped_column(String(32))
+    video_sources: Mapped[list[dict] | None] = mapped_column(JSONB(none_as_null=True))

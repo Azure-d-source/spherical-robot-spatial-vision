@@ -12,6 +12,7 @@ import { SessionGate, WorkbenchBrand } from './SessionGate'
 import { UploadHistoryDialog } from './UploadHistoryDialog'
 import { WithdrawPhotoDialog } from './WithdrawPhotoDialog'
 import { RerunJobDialog } from './RerunJobDialog'
+import { VideoImportDialog } from './VideoImportDialog'
 
 const sceneFilters: { status: 'all' | SceneStatus; label: string }[] = [
   { status: 'all', label: '全部' },
@@ -42,6 +43,7 @@ function Studio({
 }) {
   const [frames, setFrames] = useState<Frame[]>([])
   const [historyFrame, setHistoryFrame] = useState<Frame>()
+  const [videoImportOpen, setVideoImportOpen] = useState(false)
   const [withdrawCandidate, setWithdrawCandidate] = useState<Frame>()
   const [rerunCandidate, setRerunCandidate] = useState<{ job: Job; batch: Revision }>()
   const [revisions, setRevisions] = useState<Revision[]>([])
@@ -145,6 +147,15 @@ function Studio({
     galleryLayoutRef.current = key
     setGalleryLayout(key)
     setSelected([])
+  }
+  function importedVideo(accepted: Frame[]) {
+    showLayout('')
+    seq.current++
+    setSelected((old) => [...new Set([...old, ...accepted.map((f) => f.frame_id)])])
+    setFrames((old) => [...new Map([...old, ...accepted].map((f) => [f.frame_id, f])).values()])
+    showFrame(accepted[0].frame_id)
+    setNotice(`已导入并选中 ${accepted.length} 张视频帧。`)
+    reload((value) => value + 1)
   }
   function moveExhibit(next: SimulationLayout) {
     setLayout(next)
@@ -289,6 +300,9 @@ function Studio({
             同步中…
           </span>
         )}
+        {tab === 'capture' && accountId && !archived && (
+          <button className="secondary" onClick={() => setVideoImportOpen(true)}>导入 MP4</button>
+        )}
       </div>
       {error && (
         <div className="notice error" role="alert">
@@ -387,6 +401,10 @@ function Studio({
       </div>
       {historyFrame && (
         <UploadHistoryDialog sceneId={scene.scene_id} frame={historyFrame} onClose={() => setHistoryFrame(undefined)} />
+      )}
+      {videoImportOpen && !archived && (
+        <VideoImportDialog sceneId={scene.scene_id} onImported={importedVideo}
+          onClose={() => setVideoImportOpen(false)} />
       )}
       {withdrawCandidate && (
         <WithdrawPhotoDialog frame={withdrawCandidate} onConfirm={withdrawPhoto}

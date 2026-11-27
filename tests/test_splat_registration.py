@@ -62,6 +62,7 @@ class ReconstructionTests(unittest.TestCase):
         return Namespace(
             images=self.source, output_dir=self.root / output, brush_exe=Path(sys.executable),
             splat_transform_cli=None, long_edge=4, steps=400, max_splats=100,
+            ssim_weight=None, eval_split_every=None,
         )
 
     def test_three_of_four_frames_reach_brush_and_manifest(self):

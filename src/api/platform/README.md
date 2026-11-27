@@ -31,6 +31,14 @@ npm --prefix src/web run dev -- --host 127.0.0.1 --port 5173 --strictPort
 
 PostgreSQL 入口默认把原图写入 `data/platform-runtime/photos`。可以用 `SPATIAL_DATA_DIR` 指定独立的运行目录。每个数据库使用自己的目录，同一数据库的 API 和 Worker 使用同一目录。
 
+## 从 MP4 导入照片
+
+在 API 主机安装 FFmpeg 并把它放入 `PATH`，或将 `SPATIAL_FFMPEG` 设为可执行文件路径。抽帧由 API 主机执行，选中帧照常进入照片、冻结批次和 GPU Worker 流程。数据库迁移至 `head` 后，在进行中场景的「照片采集」打开「导入 MP4」。
+
+选择最大 200 MiB 的 MP4，填写开始时间、可选时长、帧率和帧数上限。候选帧最多 120 张，帧率可设为 0.1–30 fps，候选图长边最多 1920 像素。预览后勾选清晰画面，点击「导入选中帧」，可直接确认照片批次。关闭窗口后，可重新打开「已抽帧视频」继续选图。如使用反向代理，代理的请求体大小限制和响应超时也会影响上传。
+
+原始 MP4 和候选图保存在 `SPATIAL_DATA_DIR/videos`，视频哈希、抽帧参数和导入关系保存在 PostgreSQL。照片上传记录和冻结批次的「原图顺序」均可查看来源并下载原始 MP4。已冻结的来源随作业写入产物 `manifest.json` 的输入帧 `video_sources`，包含原视频 SHA-256、抽帧参数、FFmpeg 版本和候选帧顺序。后来导入的来源会在下次冻结时保存。归档场景保留来源和下载权限。跨团队的原视频和候选帧请求返回 `404`。
+
 ## 启动 GPU Worker
 
 API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变量提供同一个 `SPATIAL_WORKER_TOKEN`。依照 [P3 GPU 环境说明](../../../docs/experiments/workbench-gpu-smoke.md#启动与复现) 配置 DA3 和 3DGS 的 Python 路径、DA3 权重、Brush 与可选的 SplatTransform。Worker 从同机的 API 监听地址领取作业。浏览器在异地内测时通过反向代理的 HTTPS 地址访问。
@@ -55,6 +63,9 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 | `GET /api/scenes/{scene_id}/frames` | 按上传顺序返回去重后的照片及原图地址。 |
 | `GET /api/scenes/{scene_id}/frames/{frame_id}/uploads` | 同队成员可按上传时间查看记录。返回上传人编号、账号邮箱 `uploader_email`、采集编号、机位、采集时间 `captured_at` 和上传时间 `created_at`。 |
 | `GET /api/frames/{frame_id}/image` | 登录后按照片所属场景校验团队权限，并返回原图。 |
+| `POST /api/scenes/{scene_id}/videos` | 请求体为 `video/mp4`。查询参数为 `filename`、`start_seconds`、可选 `duration_seconds`、`fps` 和 `max_frames`。返回视频信息和有序候选帧。 |
+| `GET /api/scenes/{scene_id}/videos`、`GET /api/scenes/{scene_id}/videos/{video_id}` | 查看同一场景的视频列表、抽帧参数和候选图地址。 |
+| `POST /api/scenes/{scene_id}/videos/{video_id}/import` | 提交所选 `candidate_ids`，返回导入场景的去重照片。候选图和原视频均通过返回的同源地址访问。 |
 | `DELETE /api/scenes/{scene_id}/frames/{frame_id}` | 首次上传者、场景创建者或管理员可撤下未用于批次的照片。成功和重复撤下均返回 `204`。已用于批次时返回 `409 FRAME_IN_USE`。 |
 | `POST /api/scenes/{scene_id}/revisions` | 提交有序的 `frame_ids`，新建返回 `201`，完全相同的清单复用时返回 `200`。照片已撤下时返回 `409 FRAME_WITHDRAWN`。 |
 | `GET /api/scenes/{scene_id}/revisions`、`GET /api/scenes/{scene_id}/revisions/{revision_id}` | 返回批次版本、创建者以及冻结时的照片顺序。 |
