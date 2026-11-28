@@ -1,24 +1,58 @@
 # 团队工作台与 PostgreSQL 后端
 
-此入口用于联调 PostgreSQL、账号会话、团队场景、照片采集、冻结批次与重建作业。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
+`src.api.platform.app:create_app` 是 SplatForge · 灵境智绘的唯一正式工作台入口，提供团队登录、场景管理、照片和视频导入、冻结批次与重建作业。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
 
 ## 启动与数据库迁移
 
-在仓库根目录运行以下 PowerShell 命令。将测试连接串中的账号、密码和数据库替换为自己的值。数据库可先用一个空的开发库。
+在仓库根目录运行以下命令。准备 Python 3.12、Node.js 22.12 或更高版本、PowerShell 7 和已启动的 PostgreSQL 服务。视频导入需要 FFmpeg。首次使用空数据库时，用 PostgreSQL 管理员执行以下命令创建专用角色和数据库。已有专用数据库时可直接配置连接串。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r src/api/platform/requirements.txt
-$env:SPATIAL_DATABASE_URL = 'postgresql+psycopg://user:password@127.0.0.1:5432/orbitforge'
-.\.venv\Scripts\python.exe -m alembic -c src/api/platform/alembic.ini upgrade head
-.\.venv\Scripts\python.exe -m src.api.platform.manage create-team orbitforge
-.\.venv\Scripts\python.exe -m src.api.platform.manage create-account orbitforge owner@example.test --role admin
-.\.venv\Scripts\python.exe -m src.api.platform.manage create-account orbitforge member@example.test
-npm --prefix src/web ci
-npm --prefix src/web run build
-.\.venv\Scripts\python.exe -m uvicorn src.api.platform.app:create_app --factory --host 127.0.0.1 --port 8001
+psql -U postgres -d postgres
 ```
 
-打开 [团队工作台](http://127.0.0.1:8001/) 后用预先创建的账号登录。创建账号时在终端输入密码。答辩可提前准备一个演示账号，团队内测为每位成员创建独立账号。同队场景可见，场景创建者和团队管理员可改名、归档或恢复。可按「全部」「进行中」「已归档」筛选。接口契约见 [OpenAPI 文档](http://127.0.0.1:8001/docs)。
+```sql
+CREATE ROLE splatforge LOGIN;
+\password splatforge
+CREATE DATABASE splatforge OWNER splatforge;
+\q
+```
+
+在 PowerShell 中设置连接串并执行迁移。如果 PostgreSQL 使用其他主机或端口，修改连接串中的地址。
+
+```powershell
+if (!(Test-Path '.venv/Scripts/python.exe')) { python -m venv .venv }
+$py = (Resolve-Path '.venv/Scripts/python.exe').Path
+& $py -m pip install -r src/api/platform/requirements.txt
+$password = [uri]::EscapeDataString((Read-Host 'PostgreSQL 演示库密码' -MaskInput))
+$env:SPATIAL_DATABASE_URL = "postgresql+psycopg://splatforge:${password}@127.0.0.1:5432/splatforge"
+Remove-Variable password
+& $py -m alembic -c src/api/platform/alembic.ini upgrade head
+```
+
+首次迁移后创建演示团队和账号。创建账号时按提示输入两遍密码，长度为 12–256 个字符。
+
+```powershell
+& $py -m src.api.platform.manage create-team splatforge-demo
+& $py -m src.api.platform.manage create-account splatforge-demo reviewer@example.test --role admin
+& $py -m src.api.platform.manage create-account splatforge-demo member@example.test
+```
+
+在同一个 PowerShell 窗口构建前端并启动 API。需要运行 GPU 作业时，在此窗口按下方说明启动 Worker，让两个进程继承同一数据目录与令牌。
+
+```powershell
+npm --prefix src/web ci
+npm --prefix src/web run build
+if ($LASTEXITCODE -ne 0) { throw '前端构建失败' }
+$env:SPATIAL_PUBLIC_ORIGIN = 'http://127.0.0.1:8001'
+$env:SPATIAL_DATA_DIR = Join-Path (Get-Location).Path 'data/platform-runtime'
+$env:SPATIAL_WORKER_TOKEN = (& $py -c 'import secrets; print(secrets.token_urlsafe(32))').Trim()
+$apiProcess = Start-Process -FilePath $py -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru -ArgumentList @(
+    '-m', 'uvicorn', 'src.api.platform.app:create_app', '--factory',
+    '--host', '127.0.0.1', '--port', '8001'
+)
+```
+
+待 [健康检查](http://127.0.0.1:8001/api/health) 返回 `workbench: "team"` 后，打开 [团队工作台](http://127.0.0.1:8001/) 并用 `reviewer@example.test` 登录。团队内测为每位成员创建独立账号。同队场景可见，场景创建者和团队管理员可改名、归档或恢复。可按「全部」「进行中」「已归档」筛选。接口契约见 [OpenAPI 文档](http://127.0.0.1:8001/docs)。
 
 异地内测时，将 `SPATIAL_PUBLIC_ORIGIN` 设为工作台的 HTTPS 源地址，例如 `https://workbench.example.com`。将页面、API 和静态查看器都转发给同一后端，并保留原始 Host。HTTPS 模式会为会话 Cookie 启用 Secure。
 

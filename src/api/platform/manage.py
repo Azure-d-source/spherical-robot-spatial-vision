@@ -12,7 +12,7 @@ from .config import PlatformSettings
 
 
 def main() -> None:
-    parser = ArgumentParser(description="Provision OrbitForge teams and accounts")
+    parser = ArgumentParser(description="Provision SplatForge teams and accounts")
     commands = parser.add_subparsers(dest="command", required=True)
     team = commands.add_parser("create-team")
     team.add_argument("slug")

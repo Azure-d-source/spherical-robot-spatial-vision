@@ -84,7 +84,7 @@ export interface TeamJob extends Job {
 }
 export const sources: Record<Source, string> = {
   sample: '手动样例',
-  robot: '球形机器人',
+  robot: '仿生采集平台',
   simulation: '虚拟相机',
 }
 export const kinds: Record<Kind, string> = {

@@ -121,13 +121,14 @@ h2 {
 }
 .brand strong {
   font-size: 1.15rem;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.015em;
   color: #f5fafb;
   font-weight: 680;
 }
 .brand-mark {
   position: relative;
   display: inline-block;
+  flex: none;
   width: 31px;
   height: 31px;
   border-radius: 9px;
@@ -953,40 +954,245 @@ select {
 }
 .workbench-dialog.video-import {
   width: min(780px, calc(100% - 24px));
+  max-height: min(54rem, calc(100dvh - 1.5rem));
+  overflow: hidden;
+  border-color: #384b58;
+  border-radius: 12px;
+  box-shadow: 0 20px 64px rgb(0 0 0 / 42%);
+}
+.workbench-dialog.video-import[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.video-import .form-body {
+  gap: 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.video-close {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  color: var(--muted);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+.video-close:hover:enabled {
+  background: #263642;
+  text-decoration: none;
 }
 .video-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  min-inline-size: 0;
   padding: 0;
   margin: 0;
   border: 0;
 }
-.video-import progress {
+.video-fields label {
+  min-width: 0;
+}
+.video-dropzone {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  justify-items: start;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 0.85rem 1rem;
+  background: #131f2a;
+  text-align: left;
+}
+.video-dropzone * {
+  pointer-events: none;
+}
+.video-drop-icon {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid #3b625e;
+  border-radius: 8px;
+  background: #1d3539;
+  color: var(--teal);
+  font-size: 1.3rem;
+}
+.video-drop-copy {
+  display: grid;
   width: 100%;
+  min-width: 0;
+  gap: 0.22rem;
+}
+.video-drop-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-drop-action {
+  color: #ade7d5;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+.video-upload-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem 0.9rem;
+}
+.video-upload-button {
+  min-height: 2.5rem;
+  border-color: #41766a;
+  background: #234b43;
+  color: #d5fbec;
+  font-weight: 620;
+}
+.video-upload-button:hover:enabled {
+  border-color: #66ac98;
+  background: #2e6155;
+}
+.video-upload-status {
+  display: grid;
+  flex: 1 1 12rem;
+  gap: 0.32rem;
+  max-width: 22rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.video-upload-status progress {
+  width: 100%;
+  height: 0.42rem;
+  border: 0;
+  border-radius: 1rem;
+  overflow: hidden;
+  accent-color: var(--teal);
+}
+.video-upload-status progress::-webkit-progress-bar {
+  background: #324650;
+}
+.video-upload-status progress::-webkit-progress-value {
+  background: var(--teal);
+}
+.video-history {
+  display: block;
+  border-top: 1px solid var(--line);
+  padding-top: 0.9rem;
+}
+.video-preview-heading,
+.video-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.video-preview-heading {
+  justify-content: space-between;
+  margin-bottom: 0.55rem;
+}
+.video-preview-heading p {
+  font-size: 0.9rem;
+  font-weight: 620;
+}
+.video-preview-heading .hint {
+  margin-left: 0.4rem;
+  font-weight: 400;
+}
+.video-preview-actions button {
+  min-height: 2rem;
+  white-space: nowrap;
 }
 .video-candidates {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 12px;
-  margin: 12px 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
 }
-.video-candidate img {
+.video-candidate {
+  position: relative;
+  min-width: 0;
+}
+.video-candidate-select {
+  width: 100%;
+  display: grid;
+  gap: 0.38rem;
+  padding: 0.26rem;
+  border: 1px solid #3a4c59;
+  border-radius: 8px;
+  background: #111c26;
+  color: #bfced7;
+  text-align: left;
+}
+.video-candidate-select:hover:enabled {
+  border-color: #6b9e93;
+  background: #1a2934;
+}
+.video-candidate-select[aria-pressed='true'] {
+  border-color: var(--teal);
+  background: #1a3437;
+  color: #d9f8ed;
+}
+.video-candidate-select[aria-pressed='true']:hover:enabled {
+  border-color: var(--teal);
+  background: #214044;
+}
+.video-candidate-thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #182734;
+}
+.video-candidate-thumb img {
   display: block;
   width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: contain;
-  background: #0a1118;
+  height: 100%;
+  object-fit: cover;
+}
+.video-candidate-check {
+  position: absolute;
+  inset: 0.36rem 0.36rem auto auto;
+  display: grid;
+  place-items: center;
+  width: 1.28rem;
+  height: 1.28rem;
+  border: 1px solid #bbcccf;
   border-radius: 4px;
+  background: #15252de6;
 }
-.form-body .video-candidate label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 0;
+[aria-pressed='true'] .video-candidate-check {
+  border-color: var(--teal);
+  background: var(--teal);
 }
-.video-candidate input[type='checkbox'] {
-  width: auto;
+[aria-pressed='true'] .video-candidate-check::before {
+  content: '';
+  width: 0.33rem;
+  height: 0.58rem;
+  border: solid var(--ink);
+  border-width: 0 2px 2px 0;
+  transform: translateY(-0.06rem) rotate(45deg);
+}
+.video-candidate-caption {
+  padding: 0.14rem 1.9rem 0.22rem 0.35rem;
+  font-size: 0.8125rem;
+}
+.video-candidate-view {
+  position: absolute;
+  right: 0.42rem;
+  bottom: 0.34rem;
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 4px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.video-candidate-view:hover {
+  background: #2b414b;
+  color: var(--teal);
+}
+.video-footer {
+  border-top: 1px solid var(--line);
+  padding: 0.75rem 1.1rem;
+  background: #151f29;
 }
 .video-source-details {
   width: 100%;
@@ -1379,7 +1585,20 @@ tbody tr:last-child td {
     gap: 0.8rem;
   }
   .brand strong {
-    font-size: 1.02rem;
+    font-size: 0.92rem;
+    white-space: normal;
+    word-break: keep-all;
+  }
+  .brand {
+    gap: 0.5rem;
+  }
+  .video-fields,
+  .video-candidates {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .video-dropzone {
+    gap: 0.55rem;
+    padding-inline: 0.65rem;
   }
   .server-state {
     font-size: 0.8125rem;

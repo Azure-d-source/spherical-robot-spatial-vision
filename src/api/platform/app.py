@@ -48,7 +48,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         finally:
             await run_in_threadpool(engine.dispose)
 
-    app = FastAPI(title="OrbitForge API", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="SplatForge API", version="0.2.0", lifespan=lifespan)
     app.state.secure_cookies = origin.scheme == "https"
     app.state.worker_token = settings.worker_token
     root = settings.data_dir.resolve()
