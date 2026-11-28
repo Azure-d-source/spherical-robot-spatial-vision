@@ -21,6 +21,7 @@ from .database import Base, Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
 from .revision_models import RevisionFrame
 from .scenes import Scene, require_active, require_scene, require_writable_scene
+from .video_models import VideoCandidate, VideoImport, VideoSource, video_source
 
 router = APIRouter(prefix="/api", tags=["照片"])
 logger = logging.getLogger(__name__)
@@ -67,8 +68,11 @@ class FrameUpload(Base):
     __table_args__ = (
         ForeignKeyConstraint(["scene_id", "frame_id"], ["frames.scene_id", "frames.frame_id"],
                              name="fk_frame_uploads_scene_frame"),
+        ForeignKeyConstraint(["scene_id", "video_candidate_id"], ["video_candidates.scene_id", "video_candidates.candidate_id"],
+                             name="fk_frame_uploads_scene_candidate"),
         UniqueConstraint("scene_id", "uploader_id", "capture_id", name="uq_frame_uploads_capture"),
         Index("ix_frame_uploads_frame_created", "frame_id", "created_at", "upload_id"),
+        Index("ix_frame_uploads_video_candidate", "video_candidate_id"),
     )
 
     upload_id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -79,6 +83,7 @@ class FrameUpload(Base):
     view_label: Mapped[str] = mapped_column(String(120))
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    video_candidate_id: Mapped[str | None] = mapped_column(String(32))
 
 
 class TeamFrame(FrameResponse):
@@ -103,6 +108,7 @@ class UploadRecord(BaseModel):
     view_label: str
     captured_at: datetime
     created_at: datetime
+    video_source: VideoSource | None = None
 
     @field_serializer("captured_at", "created_at")
     def serialize_times(self, value: datetime) -> datetime:
@@ -123,6 +129,28 @@ def rollback_photo(db: Session, digest: str, destination: Path) -> None:
                 destination.unlink(missing_ok=True)
     except (SQLAlchemyError, OSError):
         logger.exception("Could not remove an unreferenced photo after upload rollback: %s", digest)
+
+
+def record_frame_upload(
+    db: Session, upload: FrameUpload, *, filename: str, digest: str,
+    media_type: str, size_bytes: int, width: int, height: int,
+) -> tuple[Frame, bool]:
+    frame = db.scalar(select(Frame).where(
+        Frame.scene_id == upload.scene_id, Frame.sha256 == digest, Frame.withdrawn_at.is_(None),
+    ))
+    new_frame = frame is None
+    if frame is None:
+        frame = Frame(
+            frame_id=uuid4().hex, scene_id=upload.scene_id, uploader_id=upload.uploader_id,
+            capture_id=upload.capture_id, filename=filename, view_label=upload.view_label,
+            captured_at=upload.captured_at, created_at=upload.created_at, sha256=digest,
+            media_type=media_type, size_bytes=size_bytes, width=width, height=height,
+        )
+        db.add(frame)
+        db.flush()
+    upload.frame_id = frame.frame_id
+    db.add(upload)
+    return frame, new_frame
 
 
 @router.get("/scenes/{scene_id}/frames", response_model=list[TeamFrame], responses=PHOTO_ACCESS_ERRORS)
@@ -174,28 +202,18 @@ def upload_frame(
         response.status_code = 200
         return captured_frame
 
-    frame = db.scalar(select(Frame).where(
-        Frame.scene_id == scene_id, Frame.sha256 == digest, Frame.withdrawn_at.is_(None),
-    ))
-    new_frame = frame is None
     now = datetime.now(timezone.utc)
-    observed = captured_at or now
-    if new_frame:
-        frame = Frame(
-            frame_id=uuid4().hex, scene_id=scene_id, uploader_id=account.account_id,
-            capture_id=capture_id, filename=PureWindowsPath(image.filename or "").name[:255] or "photo",
-            view_label=view_label, captured_at=observed, created_at=now, sha256=digest,
-            media_type=media_type, size_bytes=len(data), width=width, height=height,
-        )
-        db.add(frame)
-        db.flush()
-    else:
+    frame, new_frame = record_frame_upload(
+        db, FrameUpload(
+            upload_id=uuid4().hex, scene_id=scene_id, uploader_id=account.account_id,
+            capture_id=capture_id, view_label=view_label, captured_at=captured_at or now, created_at=now,
+        ),
+        filename=PureWindowsPath(image.filename or "").name[:255] or "photo",
+        digest=digest, media_type=media_type, size_bytes=len(data), width=width, height=height,
+    )
+    if not new_frame:
         response.status_code = 200
 
-    db.add(FrameUpload(
-        upload_id=uuid4().hex, frame_id=frame.frame_id, scene_id=scene_id, uploader_id=account.account_id,
-        capture_id=capture_id, view_label=view_label, captured_at=observed, created_at=now,
-    ))
     destination = photo_path(request.app.state.photos, digest, media_type)
     published = False
     try:
@@ -241,12 +259,21 @@ def frame_uploads(scene_id: str, frame_id: str, account: CurrentAccount, db: Dat
     query = (
         select(FrameUpload.upload_id, FrameUpload.frame_id, FrameUpload.uploader_id,
                Account.email.label("uploader_email"), FrameUpload.capture_id, FrameUpload.view_label,
-               FrameUpload.captured_at, FrameUpload.created_at)
+               FrameUpload.captured_at, FrameUpload.created_at, VideoImport, VideoCandidate)
+        .select_from(FrameUpload)
         .join(Account, Account.account_id == FrameUpload.uploader_id)
+        .outerjoin(VideoCandidate, VideoCandidate.candidate_id == FrameUpload.video_candidate_id)
+        .outerjoin(VideoImport, VideoImport.video_id == VideoCandidate.video_id)
         .where(FrameUpload.scene_id == scene_id, FrameUpload.frame_id == frame_id, Account.team_id == account.team_id)
         .order_by(FrameUpload.created_at, FrameUpload.upload_id)
     )
-    return [UploadRecord.model_validate(row) for row in db.execute(query)]
+    records = []
+    for row in db.execute(query):
+        record = UploadRecord.model_validate(row)
+        if row.VideoImport is not None:
+            record.video_source = video_source(row.VideoImport, row.VideoCandidate)
+        records.append(record)
+    return records
 
 
 @router.get("/frames/{frame_id}/image", response_class=FileResponse, responses=PHOTO_ACCESS_ERRORS)

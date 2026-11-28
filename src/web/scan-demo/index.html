@@ -3,23 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>球迹视界 · 仿真扫描台</title>
+  <title>SplatForge · 灵境智绘 | 仿真扫描台</title>
   <style>__STYLE__</style>
 </head>
 <body>
   <header class="bar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>OrbitForge <span>球迹视界</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>SplatForge <span>· 灵境智绘</span></div>
     <span class="mode">本地仿真</span>
   </header>
   <main>
     <div class="hero">
-      <div><h1>仿真扫描台</h1><p>移动虚拟球机，从展品正面补拍到背面。</p></div>
+      <div><h1>仿真扫描台</h1><p>切换采集机位，从展品正面补拍到背面。</p></div>
       <button class="primary" id="sweep" type="button">开始一圈补拍</button>
     </div>
     <div class="workbench">
       <section class="card route">
-        <div class="card-title"><h2>球机航迹</h2><output id="counter" aria-live="polite"></output></div>
-        <div class="map" id="map" aria-label="选择球机拍摄机位"></div>
+        <div class="card-title"><h2>采集机位</h2><output id="counter" aria-live="polite"></output></div>
+        <div class="map" id="map" aria-label="选择采集机位"></div>
         <div class="route-readout">
           <label for="angle">相机方位 <output id="bearing"></output></label>
           <input id="angle" type="range" step="1" aria-label="相机方位">
@@ -31,9 +31,9 @@
       </section>
       <div class="views">
         <section class="card sensor">
-          <div class="card-title"><h2>球载相机</h2><span>展品 R7</span></div>
+          <div class="card-title"><h2>机位取景</h2><span>展品 R7</span></div>
           <div class="sensor-grid">
-            <figure><img id="rgb" alt="当前球载相机的仿真 RGB 画面"><figcaption>RGB</figcaption></figure>
+            <figure><img id="rgb" alt="当前采集机位的仿真 RGB 画面"><figcaption>RGB</figcaption></figure>
             <figure><img id="depth" alt="同机位的仿真真值深度图"><figcaption>真值深度</figcaption></figure>
           </div>
           <div class="depth-scale"><span id="depth-limits"></span><div><span>近</span><i></i><span>远</span></div></div>

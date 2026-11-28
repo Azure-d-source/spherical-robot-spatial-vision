@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { api, errorText } from './api'
 import type { Frame, UploadRecord } from './api'
 import { frameLabel } from './simulationLayout'
+import { VideoSourceDetails } from './VideoSourceDetails'
 
 const uploadTime = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'medium' })
 
@@ -63,6 +64,7 @@ export function UploadHistoryDialog({ sceneId, frame, onClose }: {
                 <strong>{record.uploader_email}</strong>
                 <span>{frameLabel(record.view_label)}</span>
                 <time dateTime={record.created_at}>{uploadTime.format(new Date(record.created_at))}</time>
+                {record.video_source && <VideoSourceDetails source={record.video_source} />}
               </li>
             ))}
           </ul>

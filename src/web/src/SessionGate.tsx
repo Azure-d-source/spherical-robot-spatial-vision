@@ -14,7 +14,7 @@ export function WorkbenchBrand() {
     <>
       <div className="brand">
         <span className="brand-mark" aria-hidden="true"><i /></span>
-        <strong>绕物成景</strong>
+        <strong>SplatForge · 灵境智绘</strong>
       </div>
       <span className="brand-sub">空间视觉工作台</span>
     </>

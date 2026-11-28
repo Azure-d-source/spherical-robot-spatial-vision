@@ -26,9 +26,18 @@
 
 ## 开发入口
 
-- [本地启动工作台](src/README.md#本地启动工作台) · [P3 本机 GPU 联调记录](docs/experiments/workbench-gpu-smoke.md)
+- [本地启动工作台](src/api/platform/README.md#启动与数据库迁移)使用 PostgreSQL 唯一正式入口 `src.api.platform.app:create_app`，包含建库、迁移、演示账号、构建和启动步骤。
+- [历史 SQLite 原型](src/README.md#历史-sqlite-原型) · [P3 本机 GPU 联调记录](docs/experiments/workbench-gpu-smoke.md)
 - [三维查看与虚拟取景](src/README.md#查看三维结果与虚拟取景) · [仿真扫描台简版](src/README.md#仿真扫描台简版)
 - [视觉作业与运行命令](src/README.md#本地视觉作业) · [数据组织](data/README.md)
 - [视觉精细化训练与验收](docs/experiments/visual-quality-plan.md) · [公开样例实测](docs/experiments/public-sample-benchmark.md)
 - [项目总览](docs/design/project-overview.md) · [系统架构](docs/design/platform-architecture.md) · [实施指南](docs/design/implementation-guide.md)
 - [技术调研](docs/research/spatial-vision-research.md) · [参赛与交付清单](docs/competition/submission-checklist.md)
+
+### 匿名源码导出
+
+在仓库根目录用 PowerShell 7 导出已提交的版本。校验通过后，命令会输出可用于 RAR 打包的源码目录。
+
+```powershell
+pwsh -NoProfile -File scripts/export-anonymous-submission.ps1
+```

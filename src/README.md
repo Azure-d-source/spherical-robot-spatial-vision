@@ -14,7 +14,11 @@
 
 ## 本地启动工作台
 
-使用账号登录的答辩和内测环境见 [团队工作台启动说明](api/platform/README.md)。下面是历史 SQLite 原型的本地启动方式。
+答辩、交件和团队内测统一使用 PostgreSQL 的 `src.api.platform.app:create_app`。按 [正式工作台启动说明](api/platform/README.md#启动与数据库迁移) 创建数据库和演示账号。
+
+### 历史 SQLite 原型
+
+以下命令用于复现早期本机实验。
 
 从仓库根目录执行。开发环境使用 Python 3.12 和 Node.js 22.12 或更高版本。数据默认保存在 `data/runtime/`，可通过 `SPATIAL_DATA_DIR` 指定其他目录。
 

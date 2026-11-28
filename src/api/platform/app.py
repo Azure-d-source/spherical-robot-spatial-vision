@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from threading import BoundedSemaphore
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
@@ -11,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..web import WorkbenchFiles
-from . import accounts, frames, jobs, revisions, scenes, workers
+from . import accounts, frames, jobs, revisions, scenes, videos, workers
 from .config import LOOPBACK_HOSTS, PlatformSettings
 from .database import Database
 from .errors import ApiError, ErrorResponse, InvalidRequest
@@ -28,6 +29,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
         try:
             with engine.connect() as connection:
                 connection.execute(select(scenes.Scene.archived_at).limit(1))
+                connection.execute(select(videos.VideoImport.video_id).limit(1))
         except BaseException:
             engine.dispose()
             raise
@@ -41,17 +43,21 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
             await run_in_threadpool(app.state.photos.mkdir, parents=True, exist_ok=True)
             await run_in_threadpool(app.state.staging.mkdir, parents=True, exist_ok=True)
             await run_in_threadpool(app.state.artifacts.mkdir, parents=True, exist_ok=True)
+            await run_in_threadpool(app.state.videos.mkdir, parents=True, exist_ok=True)
             yield
         finally:
             await run_in_threadpool(engine.dispose)
 
-    app = FastAPI(title="OrbitForge API", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="SplatForge API", version="0.2.0", lifespan=lifespan)
     app.state.secure_cookies = origin.scheme == "https"
     app.state.worker_token = settings.worker_token
     root = settings.data_dir.resolve()
     app.state.photos = root / "photos"
     app.state.staging = root / "staging"
     app.state.artifacts = root / "artifacts"
+    app.state.videos = root / "videos"
+    app.state.ffmpeg = settings.ffmpeg
+    app.state.video_slots = BoundedSemaphore(1)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[origin.hostname, "127.0.0.1", "localhost"])
 
     @app.middleware("http")
@@ -88,6 +94,7 @@ def create_app(settings: PlatformSettings | None = None) -> FastAPI:
     app.include_router(accounts.router)
     app.include_router(scenes.router)
     app.include_router(frames.router)
+    app.include_router(videos.router)
     app.include_router(revisions.router)
     app.include_router(jobs.router)
     app.include_router(workers.router)

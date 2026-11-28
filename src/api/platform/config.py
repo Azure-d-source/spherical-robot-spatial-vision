@@ -18,6 +18,7 @@ class PlatformSettings:
     data_dir: Path = DEFAULT_DATA_DIR
     worker_token: str | None = field(default=None, repr=False)
     web_dist: Path = DEFAULT_WEB_DIST
+    ffmpeg: str = "ffmpeg"
 
     def __post_init__(self):
         if make_url(self.database_url).drivername != "postgresql+psycopg":
@@ -40,4 +41,5 @@ class PlatformSettings:
             public_origin=os.environ.get("SPATIAL_PUBLIC_ORIGIN", "http://127.0.0.1:8001"),
             data_dir=Path(os.environ.get("SPATIAL_DATA_DIR", DEFAULT_DATA_DIR)),
             worker_token=os.environ.get("SPATIAL_WORKER_TOKEN"),
+            ffmpeg=os.environ.get("SPATIAL_FFMPEG", "ffmpeg"),
         )

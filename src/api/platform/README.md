@@ -1,24 +1,58 @@
 # 团队工作台与 PostgreSQL 后端
 
-此入口用于联调 PostgreSQL、账号会话、团队场景、照片采集、冻结批次与重建作业。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
+`src.api.platform.app:create_app` 是 SplatForge · 灵境智绘的唯一正式工作台入口，提供团队登录、场景管理、照片和视频导入、冻结批次与重建作业。API 和 Worker 在团队部署时使用同一台 GPU 主机和同一运行数据目录。
 
 ## 启动与数据库迁移
 
-在仓库根目录运行以下 PowerShell 命令。将测试连接串中的账号、密码和数据库替换为自己的值。数据库可先用一个空的开发库。
+在仓库根目录运行以下命令。准备 Python 3.12、Node.js 22.12 或更高版本、PowerShell 7 和已启动的 PostgreSQL 服务。视频导入需要 FFmpeg。首次使用空数据库时，用 PostgreSQL 管理员执行以下命令创建专用角色和数据库。已有专用数据库时可直接配置连接串。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r src/api/platform/requirements.txt
-$env:SPATIAL_DATABASE_URL = 'postgresql+psycopg://user:password@127.0.0.1:5432/orbitforge'
-.\.venv\Scripts\python.exe -m alembic -c src/api/platform/alembic.ini upgrade head
-.\.venv\Scripts\python.exe -m src.api.platform.manage create-team orbitforge
-.\.venv\Scripts\python.exe -m src.api.platform.manage create-account orbitforge owner@example.test --role admin
-.\.venv\Scripts\python.exe -m src.api.platform.manage create-account orbitforge member@example.test
-npm --prefix src/web ci
-npm --prefix src/web run build
-.\.venv\Scripts\python.exe -m uvicorn src.api.platform.app:create_app --factory --host 127.0.0.1 --port 8001
+psql -U postgres -d postgres
 ```
 
-打开 [团队工作台](http://127.0.0.1:8001/) 后用预先创建的账号登录。创建账号时在终端输入密码。答辩可提前准备一个演示账号，团队内测为每位成员创建独立账号。同队场景可见，场景创建者和团队管理员可改名、归档或恢复。可按「全部」「进行中」「已归档」筛选。接口契约见 [OpenAPI 文档](http://127.0.0.1:8001/docs)。
+```sql
+CREATE ROLE splatforge LOGIN;
+\password splatforge
+CREATE DATABASE splatforge OWNER splatforge;
+\q
+```
+
+在 PowerShell 中设置连接串并执行迁移。如果 PostgreSQL 使用其他主机或端口，修改连接串中的地址。
+
+```powershell
+if (!(Test-Path '.venv/Scripts/python.exe')) { python -m venv .venv }
+$py = (Resolve-Path '.venv/Scripts/python.exe').Path
+& $py -m pip install -r src/api/platform/requirements.txt
+$password = [uri]::EscapeDataString((Read-Host 'PostgreSQL 演示库密码' -MaskInput))
+$env:SPATIAL_DATABASE_URL = "postgresql+psycopg://splatforge:${password}@127.0.0.1:5432/splatforge"
+Remove-Variable password
+& $py -m alembic -c src/api/platform/alembic.ini upgrade head
+```
+
+首次迁移后创建演示团队和账号。创建账号时按提示输入两遍密码，长度为 12–256 个字符。
+
+```powershell
+& $py -m src.api.platform.manage create-team splatforge-demo
+& $py -m src.api.platform.manage create-account splatforge-demo reviewer@example.test --role admin
+& $py -m src.api.platform.manage create-account splatforge-demo member@example.test
+```
+
+在同一个 PowerShell 窗口构建前端并启动 API。需要运行 GPU 作业时，在此窗口按下方说明启动 Worker，让两个进程继承同一数据目录与令牌。
+
+```powershell
+npm --prefix src/web ci
+npm --prefix src/web run build
+if ($LASTEXITCODE -ne 0) { throw '前端构建失败' }
+$env:SPATIAL_PUBLIC_ORIGIN = 'http://127.0.0.1:8001'
+$env:SPATIAL_DATA_DIR = Join-Path (Get-Location).Path 'data/platform-runtime'
+$env:SPATIAL_WORKER_TOKEN = (& $py -c 'import secrets; print(secrets.token_urlsafe(32))').Trim()
+$apiProcess = Start-Process -FilePath $py -WorkingDirectory (Get-Location).Path -WindowStyle Hidden -PassThru -ArgumentList @(
+    '-m', 'uvicorn', 'src.api.platform.app:create_app', '--factory',
+    '--host', '127.0.0.1', '--port', '8001'
+)
+```
+
+待 [健康检查](http://127.0.0.1:8001/api/health) 返回 `workbench: "team"` 后，打开 [团队工作台](http://127.0.0.1:8001/) 并用 `reviewer@example.test` 登录。团队内测为每位成员创建独立账号。同队场景可见，场景创建者和团队管理员可改名、归档或恢复。可按「全部」「进行中」「已归档」筛选。接口契约见 [OpenAPI 文档](http://127.0.0.1:8001/docs)。
 
 异地内测时，将 `SPATIAL_PUBLIC_ORIGIN` 设为工作台的 HTTPS 源地址，例如 `https://workbench.example.com`。将页面、API 和静态查看器都转发给同一后端，并保留原始 Host。HTTPS 模式会为会话 Cookie 启用 Secure。
 
@@ -30,6 +64,14 @@ npm --prefix src/web run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
 PostgreSQL 入口默认把原图写入 `data/platform-runtime/photos`。可以用 `SPATIAL_DATA_DIR` 指定独立的运行目录。每个数据库使用自己的目录，同一数据库的 API 和 Worker 使用同一目录。
+
+## 从 MP4 导入照片
+
+在 API 主机安装 FFmpeg 并把它放入 `PATH`，或将 `SPATIAL_FFMPEG` 设为可执行文件路径。抽帧由 API 主机执行，选中帧照常进入照片、冻结批次和 GPU Worker 流程。数据库迁移至 `head` 后，在进行中场景的「照片采集」打开「导入 MP4」。
+
+选择最大 200 MiB 的 MP4，填写开始时间、可选时长、帧率和帧数上限。候选帧最多 120 张，帧率可设为 0.1–30 fps，候选图长边最多 1920 像素。预览后勾选清晰画面，点击「导入选中帧」，可直接确认照片批次。关闭窗口后，可重新打开「已抽帧视频」继续选图。如使用反向代理，代理的请求体大小限制和响应超时也会影响上传。
+
+原始 MP4 和候选图保存在 `SPATIAL_DATA_DIR/videos`，视频哈希、抽帧参数和导入关系保存在 PostgreSQL。照片上传记录和冻结批次的「原图顺序」均可查看来源并下载原始 MP4。已冻结的来源随作业写入产物 `manifest.json` 的输入帧 `video_sources`，包含原视频 SHA-256、抽帧参数、FFmpeg 版本和候选帧顺序。后来导入的来源会在下次冻结时保存。归档场景保留来源和下载权限。跨团队的原视频和候选帧请求返回 `404`。
 
 ## 启动 GPU Worker
 
@@ -55,6 +97,9 @@ API 与 Worker 启动前使用同一个 `SPATIAL_DATA_DIR`，并通过环境变�
 | `GET /api/scenes/{scene_id}/frames` | 按上传顺序返回去重后的照片及原图地址。 |
 | `GET /api/scenes/{scene_id}/frames/{frame_id}/uploads` | 同队成员可按上传时间查看记录。返回上传人编号、账号邮箱 `uploader_email`、采集编号、机位、采集时间 `captured_at` 和上传时间 `created_at`。 |
 | `GET /api/frames/{frame_id}/image` | 登录后按照片所属场景校验团队权限，并返回原图。 |
+| `POST /api/scenes/{scene_id}/videos` | 请求体为 `video/mp4`。查询参数为 `filename`、`start_seconds`、可选 `duration_seconds`、`fps` 和 `max_frames`。返回视频信息和有序候选帧。 |
+| `GET /api/scenes/{scene_id}/videos`、`GET /api/scenes/{scene_id}/videos/{video_id}` | 查看同一场景的视频列表、抽帧参数和候选图地址。 |
+| `POST /api/scenes/{scene_id}/videos/{video_id}/import` | 提交所选 `candidate_ids`，返回导入场景的去重照片。候选图和原视频均通过返回的同源地址访问。 |
 | `DELETE /api/scenes/{scene_id}/frames/{frame_id}` | 首次上传者、场景创建者或管理员可撤下未用于批次的照片。成功和重复撤下均返回 `204`。已用于批次时返回 `409 FRAME_IN_USE`。 |
 | `POST /api/scenes/{scene_id}/revisions` | 提交有序的 `frame_ids`，新建返回 `201`，完全相同的清单复用时返回 `200`。照片已撤下时返回 `409 FRAME_WITHDRAWN`。 |
 | `GET /api/scenes/{scene_id}/revisions`、`GET /api/scenes/{scene_id}/revisions/{revision_id}` | 返回批次版本、创建者以及冻结时的照片顺序。 |

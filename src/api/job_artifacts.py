@@ -94,7 +94,10 @@ def prepare_result(output, snapshot, frames, row):
     public_manifest = {
         "job_id": row["job_id"], "revision_id": row["revision_id"],
         "recipe_version": row["recipe_version"], "kind": row["kind"],
-        "frames": [{"frame_id": frame["frame_id"], "sha256": frame["sha256"]} for frame in frames],
+        "frames": [{
+            "frame_id": frame["frame_id"], "sha256": frame["sha256"],
+            **({"video_sources": frame["video_sources"]} if "video_sources" in frame.keys() else {}),
+        } for frame in frames],
         **metadata,
         "artifacts": files,
     }

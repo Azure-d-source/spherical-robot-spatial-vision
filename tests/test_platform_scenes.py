@@ -4,6 +4,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -186,6 +187,142 @@ class PlatformApiTests(unittest.TestCase):
     def upload(self, client, scene, data, capture_id="shot", **metadata):
         return client.post(scene + "/frames", data={"capture_id": capture_id, **metadata},
                            files={"image": ("scene.png", data, "image/png")})
+
+    def video_request(self, client, scene, body=b"MP4 fixture", **params):
+        return client.post(scene + "/videos", content=body, headers={"Content-Type": "video/mp4"},
+                           params={"filename": "巡检.mp4", **params})
+
+    def fake_extraction(self, video, output, **options):
+        self.assertTrue(options["bounded"])
+        self.assertEqual(video.name, "source.mp4")
+        output.mkdir()
+        files = []
+        for index, color in enumerate(("blue", "green", "red")[:options["max_frames"]], 1):
+            filename = f"frame_{index:06d}.png"
+            (output / filename).write_bytes(self.photo(color))
+            files.append(filename)
+        (output / "manifest.json").write_text("{}", encoding="utf-8")
+        return {
+            "source": {"sha256": sha256(video.read_bytes()).hexdigest()},
+            "tool": {"version": "ffmpeg test"},
+            "frames": files,
+        }
+
+    def test_video_candidate_and_original_access_and_selective_import(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url=ORIGIN) as owner, TestClient(app, base_url=ORIGIN) as member, \
+                TestClient(app, base_url=ORIGIN) as outsider:
+            self.logged_in(owner, "owner@example.test")
+            self.logged_in(member, "member@example.test")
+            self.logged_in(outsider, "outsider@example.test")
+            scene = self.create_scene(owner)
+            another_scene = self.create_scene(owner)
+            with patch("src.api.platform.videos.extract_frames", side_effect=self.fake_extraction) as extract:
+                denied = self.video_request(outsider, scene)
+                self.assertEqual(denied.status_code, 404)
+                extract.assert_not_called()
+                response = self.video_request(owner, scene, max_frames=2, start_seconds=0.5, duration_seconds=3, fps=1.5)
+                self.assertEqual(response.status_code, 201, response.text)
+                extract.assert_called_once()
+                self.assertEqual(
+                    {key: extract.call_args.kwargs[key] for key in ("start", "duration", "fps", "max_frames")},
+                    {"start": 0.5, "duration": 3, "fps": 1.5, "max_frames": 2},
+                )
+                foreign_video = self.video_request(owner, another_scene).json()
+
+            video = response.json()
+            path = f"{scene}/videos/{video['video_id']}"
+            first, second = video["candidates"]
+            self.assertEqual([first["position"], second["position"]], [1, 2])
+            self.assertEqual(member.get(path).json(), video)
+            self.assertEqual(member.get(scene + "/videos").json()[0]["video_id"], video["video_id"])
+            self.assertEqual(member.get(video["original_url"]).content, b"MP4 fixture")
+            self.assertEqual(member.get(first["image_url"]).content, self.photo("blue"))
+            self.assertEqual(member.get(scene + "/frames").json(), [])
+            selection = {"candidate_ids": [second["candidate_id"]]}
+            for url in (scene + "/videos", path, video["original_url"], first["image_url"]):
+                self.assertEqual(outsider.get(url).status_code, 404)
+            self.assertEqual(outsider.post(path + "/import", json=selection).status_code, 404)
+            self.assertEqual(member.get(f"{another_scene}/videos/{video['video_id']}").status_code, 404)
+            self.assertEqual(member.post(path + "/import", json={
+                "candidate_ids": [second["candidate_id"], foreign_video["candidates"][0]["candidate_id"]],
+            }).status_code, 404)
+            self.assertEqual(member.get(scene + "/frames").json(), [])
+
+            frames = member.post(path + "/import", json=selection).json()
+            self.assertEqual(len(frames), 1)
+            self.assertEqual(owner.get(frames[0]["image_url"]).content, self.photo("green"))
+            self.assertEqual(member.post(path + "/import", json=selection).json(), frames)
+            history = owner.get(f"{scene}/frames/{frames[0]['frame_id']}/uploads").json()
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["video_source"]["candidate_id"], second["candidate_id"])
+            self.assertEqual(owner.post(scene + "/archive").status_code, 200)
+            self.assertEqual(member.get(first["image_url"]).status_code, 200)
+            self.assertEqual(member.post(path + "/import", json=selection).json()["code"], "SCENE_ARCHIVED")
+            self.assertEqual(self.video_request(member, scene).json()["code"], "SCENE_ARCHIVED")
+
+    def test_video_upload_limits_and_failed_extraction_leave_no_files(self):
+        app = create_app(self.settings)
+        with TestClient(app, base_url=ORIGIN) as user:
+            self.logged_in(user, "owner@example.test")
+            scene = self.create_scene(user)
+            with patch("src.api.platform.videos.MAX_VIDEO_BYTES", 8), \
+                    patch("src.api.platform.videos.extract_frames") as extract:
+                for body in (b"123456789", iter((b"12345", b"6789"))):
+                    response = self.video_request(user, scene, body)
+                    self.assertEqual((response.status_code, response.json()["code"]), (413, "VIDEO_LIMIT_EXCEEDED"))
+                self.assertEqual(self.video_request(user, scene, b"ok", max_frames=121).status_code, 422)
+                self.assertEqual(self.video_request(user, scene, b"ok", fps="NaN").status_code, 422)
+                extract.assert_not_called()
+            with patch("src.api.platform.videos.extract_frames", side_effect=RuntimeError("bad MP4")):
+                response = self.video_request(user, scene)
+            self.assertEqual((response.status_code, response.json()["code"]), (422, "VIDEO_EXTRACTION_FAILED"))
+            self.assertEqual(user.get(scene + "/videos").json(), [])
+            self.assertEqual(list(app.state.videos.iterdir()), [])
+
+    def test_video_provenance_is_frozen_and_published_with_the_model(self):
+        with TestClient(create_app(self.settings), base_url=ORIGIN) as user:
+            self.logged_in(user, "owner@example.test")
+            scene = self.create_scene(user)
+            photo_id = self.upload(user, scene, self.photo()).json()["frame_id"]
+            photo_batch = user.post(scene + "/revisions", json={"frame_ids": [photo_id]}).json()
+
+            def extract_and_import(body, params):
+                with patch("src.api.platform.videos.extract_frames", side_effect=self.fake_extraction):
+                    response = self.video_request(user, scene, body, **params)
+                self.assertEqual(response.status_code, 201, response.text)
+                video = response.json()
+                ids = [candidate["candidate_id"] for candidate in video["candidates"]]
+                imported = user.post(f"{scene}/videos/{video['video_id']}/import", json={"candidate_ids": ids}).json()
+                return video, [item["frame_id"] for item in imported]
+
+            video, ids = extract_and_import(b"first video", {"fps": 3})
+            self.assertEqual(ids[0], photo_id)
+            revision = user.post(scene + "/revisions", json={"frame_ids": ids}).json()
+            self.assertEqual(set(revision["video_sources"]), set(ids))
+            first = revision["video_sources"][photo_id][0]
+            self.assertEqual(first["sha256"], sha256(b"first video").hexdigest())
+            self.assertEqual(first["parameters"]["fps"], 3)
+            self.assertEqual(first["candidate_id"], video["candidates"][0]["candidate_id"])
+            second_video, same_ids = extract_and_import(b"second video", {"fps": 2})
+            self.assertEqual(ids, same_ids)
+            revision_path = f"{scene}/revisions/{revision['revision_id']}"
+            self.assertEqual(user.get(revision_path).json(), revision)
+            self.assertEqual(user.get(f"{scene}/revisions/{photo_batch['revision_id']}").json()["video_sources"], {})
+            newer = user.post(scene + "/revisions", json={"frame_ids": ids}).json()
+            self.assertNotEqual(newer["revision_id"], revision["revision_id"])
+            self.assertEqual({item["video_id"] for item in newer["video_sources"][photo_id]},
+                             {video["video_id"], second_video["video_id"]})
+
+            job = user.post("/api/jobs", json={"revision_id": revision["revision_id"], "kind": "splat"}).json()
+            claim = self.claim(user)
+            self.splat_output(claim)
+            self.complete_job(user, claim)
+            manifest = user.get(f"/api/artifacts/{job['job_id']}/manifest.json").json()
+            self.assertEqual(manifest["revision_id"], revision["revision_id"])
+            self.assertEqual([frame["frame_id"] for frame in manifest["frames"]], ids)
+            self.assertEqual(manifest["frames"][0]["video_sources"], [first])
+            self.assertEqual(user.get(f"/api/artifacts/{job['job_id']}/scene.ply").status_code, 200)
 
     def test_concurrent_duplicates_share_photo_and_record_both_members(self):
         app = create_app(self.settings)
